@@ -21,6 +21,7 @@ struct GameView: View {
 
             VStack(spacing: 14) {
                 header
+                readout
 
                 Spacer(minLength: 0)
 
@@ -82,6 +83,38 @@ struct GameView: View {
         .padding(.horizontal, 20)
     }
 
+    /// Bare-bones game readout for testing — real design pass comes later.
+    private var readout: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("Score \(state.totalScore)")
+                Spacer()
+                Text("Turn \(state.turnNumber)")
+                Spacer()
+                Text("Bag \(state.bag.count)")
+            }
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.7))
+
+            Group {
+                switch state.status {
+                case .rejected(let reason):
+                    Text(reason).foregroundStyle(.red)
+                case .played(let words, let score):
+                    Text("Played \(words.joined(separator: ", ")) +\(score) · opponent passed")
+                        .foregroundStyle(.green)
+                case nil:
+                    Text(" ")
+                }
+            }
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 20)
+    }
+
     private var actionBar: some View {
         HStack(spacing: 14) {
             ActionButton(icon: "shuffle", label: "Shuffle") {
@@ -92,7 +125,7 @@ struct GameView: View {
 
             Button {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                    state.commitTurn()
+                    state.playMove()
                 }
                 drag.refreshZoom(state: state)
             } label: {
