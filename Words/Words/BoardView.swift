@@ -53,6 +53,9 @@ struct BoardView: View {
                     .opacity(hidden ? 0 : 1)
                     .scaleEffect(fresh ? 1.0 : 0.98)
                     .transition(.scale(scale: 1.25).combined(with: .opacity))
+                    // Committed tiles are inert: let touches pass through so a
+                    // pan can start on them just like on an empty square.
+                    .allowsHitTesting(fresh)
                     .onTapGesture {
                         guard fresh else { return }
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -146,9 +149,11 @@ private struct SquareBackground: View {
                         .font(.system(size: size * 0.5))
                         .foregroundStyle(.white.opacity(0.9))
                 } else if let premium {
+                    // Scrabble GO-scale labels: the two letters span ~3/4
+                    // of the square so premiums read at full-board zoom.
                     Text(premium.label)
-                        .font(.system(size: size * 0.3, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .font(.system(size: size * 0.48, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.9))
                 }
             }
     }

@@ -32,6 +32,8 @@ tile drop, spring-back on invalid drops.
 - `DragController.liftOffset` — tile offset from finger (currently -12pt)
 - `DragController.floatingSize` — dragged tile size (54pt)
 - `DragController.placementZoom` — zoomed-in scale (1.7)
+- `DragController.panGlide` — pan momentum, glide pt per pt/s of flick (0.15);
+  glide settle spring is in `panEnded(velocity:)`
 - Haptic intensities — `Haptics` enum in DragController.swift
 - Spring constants — search `.spring(` across views
 - Pan activation threshold — `minimumDistance: 12` in GameView's boardPanGesture
@@ -43,6 +45,8 @@ tile drop, spring-back on invalid drops.
 - Score chip can clip at the board's top edge
 - No auto-pan when dragging a tile near the zoomed board's edge
   (Scrabble GO pans automatically; we require manual pan)
+- Grabbing the board mid-glide reads the settled target offset, not the
+  in-flight presentation value, so the board can jump slightly
 
 ## Build & deploy
 
@@ -52,9 +56,32 @@ feel; treat that feedback as the spec.
 
 Bundle ID: com.kittyrobotics.Words.Words
 
-<!-- After first successful device deploy, record the exact working
-     xcodebuild + devicectl commands here so every session can build,
-     install, and launch with one step. -->
+### Deploy to Adam's iPhone 14 Pro (verified working)
+
+Run from `Words/` (the directory containing `Words.xcodeproj`):
+
+```sh
+# 1. Build (note: xcodebuild wants the physical UDID, not the devicectl UUID)
+xcodebuild -project Words.xcodeproj -scheme Words -configuration Debug \
+  -destination 'id=00008120-0006796E0138C01E' \
+  -allowProvisioningUpdates -derivedDataPath build build
+
+# 2. Install over network (devicectl uses the CoreDevice UUID)
+xcrun devicectl device install app --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
+  build/Build/Products/Debug-iphoneos/Words.app
+
+# 3. Launch
+xcrun devicectl device process launch --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
+  --terminate-existing com.kittyrobotics.Words.Words
+```
+
+Gotchas:
+- The two device IDs are different on purpose: `xcodebuild -destination` needs the
+  physical UDID (`00008120-...`); `devicectl` needs the CoreDevice UUID
+  (`82327A4A-...`, from `xcrun devicectl list devices`).
+- The first `devicectl` install after a while can fail with
+  `Network.NWError error 60 - Operation timed out` while the tunnel warms up.
+  Just retry once — the second attempt succeeds.
 
 ## Out of scope for now
 

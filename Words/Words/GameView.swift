@@ -11,10 +11,16 @@ struct GameView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let metrics = BoardMetrics.fitting(width: min(geo.size.width - 16, 440))
+            let metrics = BoardMetrics.fitting(width: min(geo.size.width - 8, 440))
+            // Rack must never exceed screen width: an over-wide child makes the
+            // VStack overflow leading-aligned, shifting the whole layout off-center.
+            // 90 = outer padding (24) + rack inner padding (24) + 6 gaps × 7.
+            let rackTile = min(46, (geo.size.width - 90) / 7)
 
             VStack(spacing: 14) {
                 header
+
+                Spacer(minLength: 0)
 
                 BoardView(state: state, drag: drag, metrics: metrics)
                     .frame(width: metrics.side, height: metrics.side)
@@ -27,9 +33,7 @@ struct GameView: View {
                     .simultaneousGesture(pinchGesture(metrics: metrics))
                     .background(frameReporter { drag.boardFrame = $0; drag.metrics = metrics })
 
-                Spacer(minLength: 0)
-
-                RackView(state: state, drag: drag)
+                RackView(state: state, drag: drag, tileSize: rackTile)
                     .background(frameReporter { drag.rackFrame = $0 })
                     .padding(.horizontal, 12)
 
@@ -147,8 +151,8 @@ struct GameView: View {
             .onChanged { value in
                 drag.panChanged(translation: value.translation, state: state)
             }
-            .onEnded { _ in
-                drag.panEnded()
+            .onEnded { value in
+                drag.panEnded(velocity: value.velocity)
             }
     }
 

@@ -8,7 +8,7 @@ struct RackView: View {
     let state: BoardState
     let drag: DragController
 
-    private let tileSize: CGFloat = 46
+    var tileSize: CGFloat = 46
     private let spacing: CGFloat = 7
 
     var body: some View {

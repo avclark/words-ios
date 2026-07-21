@@ -42,6 +42,9 @@ final class DragController {
     static let floatingSize: CGFloat = 54
     /// The single zoomed-in level. There are no other zoom states.
     static let placementZoom: CGFloat = 1.7
+    /// Pan momentum: how far the board coasts after a flick, as points of
+    /// glide per point/second of release velocity. Tuning knob.
+    static let panGlide: CGFloat = 0.15
 
     var active: ActiveDrag?
     var hoverCell: BoardCoord?
@@ -174,8 +177,17 @@ final class DragController {
         panOffset = metrics.clampedOffset(proposed, zoom: zoom)
     }
 
-    func panEnded() {
+    /// Coast past the lift point in the flick direction, easing to a stop
+    /// (clamped to the board edges). Critically damped so it never bounces.
+    func panEnded(velocity: CGSize) {
+        guard panStart != nil else { return }
         panStart = nil
+        guard isZoomedIn else { return }
+        let projected = CGSize(width: panOffset.width + velocity.width * Self.panGlide,
+                               height: panOffset.height + velocity.height * Self.panGlide)
+        withAnimation(.spring(response: 0.55, dampingFraction: 1.0)) {
+            panOffset = metrics.clampedOffset(projected, zoom: zoom)
+        }
     }
 
     /// Scrabble GO behavior: dropping a tile zooms the board in around the
