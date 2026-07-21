@@ -67,18 +67,20 @@ xcodebuild -project Words.xcodeproj -scheme Words -configuration Debug \
   -allowProvisioningUpdates -derivedDataPath build build
 
 # 2. Install over network (devicectl uses the CoreDevice UUID)
-xcrun devicectl device install app --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
+xcrun devicectl device install app --device C3AC3F89-00F5-4B58-A306-A871F4FA067C \
   build/Build/Products/Debug-iphoneos/Words.app
 
 # 3. Launch
-xcrun devicectl device process launch --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
+xcrun devicectl device process launch --device C3AC3F89-00F5-4B58-A306-A871F4FA067C \
   --terminate-existing com.kittyrobotics.Words.Words
 ```
 
 Gotchas:
 - The two device IDs are different on purpose: `xcodebuild -destination` needs the
   physical UDID (`00008120-...`); `devicectl` needs the CoreDevice UUID
-  (`82327A4A-...`, from `xcrun devicectl list devices`).
+  (from `xcrun devicectl list devices`). The CoreDevice UUID can CHANGE after
+  re-pairing/OS updates — if devicectl says "device not found", re-run
+  `xcrun devicectl list devices` and use the fresh UUID.
 - The first `devicectl` install after a while can fail with
   `Network.NWError error 60 - Operation timed out` while the tunnel warms up.
   Just retry once — the second attempt succeeds.
@@ -88,3 +90,7 @@ Gotchas:
 Dictionary validation, networking, accounts, sounds, final visual design.
 An existing API server (auth, scoring, hint engine, sockets) exists from a
 previous React Native version and may be reconnected later.
+
+## Git
+
+Never create commits. The user commits manually. You may edit files and stage changes, but do not run git commit.

@@ -6,6 +6,8 @@ import SwiftUI
 struct GameView: View {
     static let spaceName = "game"
 
+    var onExit: (() -> Void)? = nil
+
     @State private var state = BoardState()
     @State private var drag = DragController()
 
@@ -59,6 +61,15 @@ struct GameView: View {
 
     private var header: some View {
         HStack {
+            if let onExit {
+                Button(action: onExit) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+            }
             Text("WORDS")
                 .font(.system(size: 22, weight: .black, design: .rounded))
                 .foregroundStyle(Color.yellow)
