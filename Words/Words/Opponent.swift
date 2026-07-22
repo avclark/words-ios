@@ -21,14 +21,39 @@ protocol OpponentEngine: AnyObject {
                   completion: @escaping (OpponentAction) -> Void)
 }
 
-/// The built-in AI: computes the best move on a background queue via the
+/// How strong the AI plays. Every difficulty plays only legal moves; the
+/// levels differ in which of the generator's ranked candidates gets picked
+/// (see AIPlayer.move). Persisted per game.
+enum AIDifficulty: String, Codable, CaseIterable, Identifiable {
+    case easy, medium, hard
+
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+
+    var blurb: String {
+        switch self {
+        case .easy: return "Plays relaxed"
+        case .medium: return "Puts up a fight"
+        case .hard: return "Plays the best move it can find"
+        }
+    }
+}
+
+/// The built-in AI: computes its move on a background queue via the
 /// Phase 2 generator, with a small floor delay so its tiles don't
 /// materialize the same instant the player's commit lands.
 final class LocalAIOpponent: OpponentEngine {
+    private let difficulty: AIDifficulty
+
+    init(difficulty: AIDifficulty = .hard) {
+        self.difficulty = difficulty
+    }
+
     func takeTurn(board: [BoardCoord: Tile], rack: [Tile],
                   completion: @escaping (OpponentAction) -> Void) {
+        let difficulty = difficulty
         DispatchQueue.global(qos: .userInitiated).async {
-            let move = AIPlayer.bestMove(board: board, rack: rack)
+            let move = AIPlayer.move(board: board, rack: rack, difficulty: difficulty)
             let action: OpponentAction = move.map { .play(placement: $0.placement, word: $0.word) } ?? .pass
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 completion(action)

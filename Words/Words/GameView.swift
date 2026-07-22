@@ -6,20 +6,13 @@ import SwiftUI
 struct GameView: View {
     static let spaceName = "game"
 
+    /// Owned by RootView (which persists it); this view only presents it.
+    let state: BoardState
     var onExit: (() -> Void)? = nil
     var onNewGame: (() -> Void)? = nil
 
-    @State private var state: BoardState
     @State private var drag = DragController()
     @State private var showSwapSheet = false
-
-    init(profile: PlayerProfile = LocalProfile.load(),
-         onExit: (() -> Void)? = nil,
-         onNewGame: (() -> Void)? = nil) {
-        self.onExit = onExit
-        self.onNewGame = onNewGame
-        _state = State(initialValue: BoardState(localProfile: profile))
-    }
 
     var body: some View {
         GeometryReader { geo in
@@ -249,5 +242,5 @@ private struct ActionButton: View {
 }
 
 #Preview {
-    GameView()
+    GameView(state: BoardState())
 }

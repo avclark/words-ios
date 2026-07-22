@@ -11,8 +11,8 @@ enum PlayStatus: Equatable {
 /// endgame math from GAME-LOGIC-REFERENCE.md: each player loses their
 /// leftover tile values; a player who emptied their rack gains the
 /// opponent's leftovers.
-struct GameOverSummary: Equatable {
-    enum Reason: Equatable {
+struct GameOverSummary: Equatable, Codable {
+    enum Reason: String, Equatable, Codable {
         case localEmptied, opponentEmptied, sixPasses
     }
     let reason: Reason
@@ -27,7 +27,7 @@ struct GameOverSummary: Equatable {
 /// the turn — for the local AI that's a second or two of computing; for a
 /// future remote player it could be hours. The game screen renders the same
 /// "waiting" state either way.
-enum TurnState: Equatable {
+enum TurnState: String, Equatable, Codable {
     case local
     case opponent
 }
@@ -36,6 +36,18 @@ enum TurnState: Equatable {
 /// OpponentEngine seam and is NOT assumed to be the local AI.
 @Observable
 final class BoardState {
+    /// Stable identity of this game across launches — the key the saved
+    /// game is stored under, and later the server-side game ID.
+    let gameID: UUID
+    let createdAt: Date
+    /// How strong this game's AI plays. Fixed at game creation.
+    let difficulty: AIDifficulty
+
+    /// Called after any change worth persisting (turn completions, blank
+    /// assignment). The owner wires this to the GameStore; the model never
+    /// touches storage itself.
+    var onAutosave: ((BoardState) -> Void)?
+
     /// Tiles locked into the board from previous turns.
     private(set) var committed: [BoardCoord: Tile] = [:]
     /// Tiles tentatively placed this turn (still movable/recallable).
@@ -90,8 +102,12 @@ final class BoardState {
 
     init(localProfile: PlayerProfile = LocalProfile.load(),
          opponentProfile: PlayerProfile = .ai,
-         opponentEngine: OpponentEngine = LocalAIOpponent()) {
-        self.opponentEngine = opponentEngine
+         difficulty: AIDifficulty = .hard,
+         opponentEngine: OpponentEngine? = nil) {
+        self.gameID = UUID()
+        self.createdAt = Date()
+        self.difficulty = difficulty
+        self.opponentEngine = opponentEngine ?? LocalAIOpponent(difficulty: difficulty)
         // Touch the lexicon up front so a missing word list fails loudly at
         // game start, not mid-play.
         _ = Lexicon.words
@@ -100,6 +116,54 @@ final class BoardState {
         players[localIndex].rack = draw(7)
         players[opponentIndex].rack = draw(7)
         AIPlayer.warmUp()
+    }
+
+    /// Restore a persisted game exactly where it left off.
+    init(from saved: SavedGame, opponentEngine: OpponentEngine? = nil) {
+        self.gameID = saved.id
+        self.createdAt = saved.createdAt
+        self.difficulty = saved.difficulty
+        self.opponentEngine = opponentEngine ?? LocalAIOpponent(difficulty: saved.difficulty)
+        _ = Lexicon.words
+        committed = saved.committed
+        placed = saved.placed
+        pendingBlank = saved.pendingBlank
+        bag = saved.bag
+        players = saved.players
+        turnState = saved.turnState
+        turnNumber = saved.turnNumber
+        consecutivePasses = saved.consecutivePasses
+        moveLog = saved.moveLog
+        gameOver = saved.gameOver
+        AIPlayer.warmUp()
+        // If the app died while the opponent held the turn, the engine's
+        // computation died with it — hand the turn over again.
+        if turnState == .opponent && gameOver == nil {
+            beginOpponentTurn()
+        }
+    }
+
+    /// Complete, serializable game state — everything needed to resume this
+    /// exact game on a later launch (and, later, to sync a remote game).
+    func snapshot() -> SavedGame {
+        SavedGame(id: gameID,
+                  createdAt: createdAt,
+                  updatedAt: Date(),
+                  difficulty: difficulty,
+                  committed: committed,
+                  placed: placed,
+                  pendingBlank: pendingBlank,
+                  bag: bag,
+                  players: players,
+                  turnState: turnState,
+                  turnNumber: turnNumber,
+                  consecutivePasses: consecutivePasses,
+                  moveLog: moveLog,
+                  gameOver: gameOver)
+    }
+
+    private func autosave() {
+        onAutosave?(self)
     }
 
     // MARK: - Queries
@@ -186,6 +250,7 @@ final class BoardState {
         tile.assignedLetter = letter
         placed[coord] = tile
         pendingBlank = nil
+        autosave()
     }
 
     func recallAll() {
@@ -274,9 +339,10 @@ final class BoardState {
         // ends now; the opponent does not get another turn.
         if bag.isEmpty && localRack.isEmpty {
             endGame(reason: .localEmptied)
-            return
+        } else {
+            beginOpponentTurn()
         }
-        beginOpponentTurn()
+        autosave()
     }
 
     // MARK: - Pass & swap
@@ -292,9 +358,10 @@ final class BoardState {
         log("\(localPlayer.profile.displayName) passed")
         if consecutivePasses >= 6 {
             endGame(reason: .sixPasses)
-            return
+        } else {
+            beginOpponentTurn()
         }
-        beginOpponentTurn()
+        autosave()
     }
 
     /// Whether a swap of `count` tiles is currently allowed.
@@ -325,6 +392,7 @@ final class BoardState {
         status = nil
         log("\(localPlayer.profile.displayName) swapped \(discarded.count) tile\(discarded.count == 1 ? "" : "s")")
         beginOpponentTurn()
+        autosave()
     }
 
     // MARK: - Opponent turn
@@ -348,6 +416,7 @@ final class BoardState {
     /// The single entry point for opponent actions, whatever their source.
     private func handleOpponentAction(_ action: OpponentAction) {
         guard gameOver == nil else { return }
+        defer { autosave() }
         turnState = .local
         switch action {
         case .pass:

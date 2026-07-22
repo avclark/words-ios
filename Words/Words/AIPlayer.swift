@@ -43,8 +43,18 @@ enum AIPlayer {
     /// The highest-scoring legal move, or nil if the AI cannot play.
     /// Pure function of value-type snapshots — safe on any thread.
     static func bestMove(board: [BoardCoord: Tile], rack: [Tile]) -> Move? {
+        move(board: board, rack: rack, difficulty: .hard)
+    }
+
+    /// A legal move picked to match the difficulty, or nil if none exists.
+    /// Difficulty never changes WHAT is legal — every candidate comes from
+    /// the same generator — only which rank of candidate gets played:
+    /// hard takes the top score, medium the top-quartile boundary, easy the
+    /// median. Pure function of value-type snapshots — safe on any thread.
+    static func move(board: [BoardCoord: Tile], rack: [Tile],
+                     difficulty: AIDifficulty) -> Move? {
         let scorer = MoveScorer(board: board)
-        var best: Move?
+        var moves: [Move] = []
         for transposed in [false, true] {
             let generator = Generator(board: board, rack: rack, transposed: transposed)
             generator.run { placement, word in
@@ -52,12 +62,18 @@ enum AIPlayer {
                     assertionFailure("Generator emitted an unscorable placement: \(word)")
                     return
                 }
-                if score > (best?.score ?? Int.min) {
-                    best = Move(placement: placement, word: word, score: score)
-                }
+                moves.append(Move(placement: placement, word: word, score: score))
             }
         }
-        return best
+        guard !moves.isEmpty else { return nil }
+        moves.sort { $0.score > $1.score }
+        let index: Int
+        switch difficulty {
+        case .hard: index = 0
+        case .medium: index = moves.count / 4
+        case .easy: index = moves.count / 2
+        }
+        return moves[min(index, moves.count - 1)]
     }
 
     // MARK: - Trie

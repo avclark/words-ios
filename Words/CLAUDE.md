@@ -96,9 +96,9 @@ previous React Native version and may be reconnected later.
 Never create commits. The user commits manually. You may edit files and stage changes, but do not run git commit.
 ## Current status (end of session, 2026-07-21)
 
-**Completed: Phases 0–4** of the local single-player build (per PRODUCT-SPEC.md
-build order). The game is playable end to end on device; all changes are
-uncommitted in the working tree pending Adam's device testing of Phase 4.
+**Completed: Phases 0–5** of the local single-player build (per PRODUCT-SPEC.md
+build order). The game is playable end to end on device; Phase 5 changes are
+uncommitted in the working tree pending Adam's device testing.
 
 - Phase 0: home screen shell, new-game/exit flow (RootView swaps HomeView ↔
   GameView; fresh UUID identity per game).
@@ -118,9 +118,26 @@ uncommitted in the working tree pending Adam's device testing of Phase 4.
   (avatars/scores/turn/bag/pass/move log), thin profile editor on Home
   (LocalProfile in UserDefaults).
 
-**Next: Phase 5** — home screen as game lobby (list of games, not one button)
-+ game setup (AI difficulty) + local game persistence. Then Phase 6 (profile
-stats), backend design, multiplayer (see PRODUCT-SPEC.md).
+- Phase 5: persistence + lobby + game setup. SavedGame (GameStore.swift) is
+  the complete serializable game state (board, both racks, scores, bag order,
+  turn, passes, log, pending placement) — the record that later syncs for
+  async multiplayer. GameStore = file-per-game JSON under Application
+  Support/Games. BoardState gained gameID/createdAt/difficulty, init(from:),
+  snapshot(), and an onAutosave hook fired after every turn-completing
+  action; RootView also saves on scenePhase change and exit. If a save has
+  turnState .opponent, restore re-kicks the engine (the pre-quit computation
+  died with the process). HomeView is now the lobby (rows sorted your-turn →
+  waiting → finished, swipe-to-delete, profile sheet, new-game sheet with
+  the "invite a friend" seam). AI difficulty: AIPlayer.move(difficulty:)
+  picks best / top-quartile / median from the ranked candidates;
+  bestMove == .hard (tests unchanged). 3 persistence round-trip tests added.
+
+**Fixed since Phase 4 device testing:** full-rack drag freeze (rack slots
+now never remove the dragged tile's view — its slot IS the gap, invariant 2)
+and the pass chip now always visible (dimmed at 0/6).
+
+**Next: Phase 6** — thin local profile stats. Then backend design,
+multiplayer (see PRODUCT-SPEC.md).
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

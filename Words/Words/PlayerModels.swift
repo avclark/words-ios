@@ -60,7 +60,7 @@ struct PlayerProfile: Identifiable, Equatable, Codable {
 /// A participant in one game: identity plus per-game state. "You" and the
 /// AI are two instances of this same type; a remote human later becomes a
 /// third instance with no changes to the game screen.
-struct Player: Identifiable, Equatable {
+struct Player: Identifiable, Equatable, Codable {
     var profile: PlayerProfile
     var score = 0
     var rack: [Tile] = []

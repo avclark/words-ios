@@ -14,12 +14,35 @@ struct Tile: Identifiable, Equatable {
     var points: Int { isBlank ? 0 : LetterValues.points[letter, default: 0] }
 }
 
-struct BoardCoord: Hashable, Equatable {
+struct BoardCoord: Hashable, Equatable, Codable {
     var row: Int
     var col: Int
 
     var isValid: Bool { row >= 0 && row < 15 && col >= 0 && col < 15 }
     static let center = BoardCoord(row: 7, col: 7)
+}
+
+/// Persistence: a tile is just its letters — `id` is minted fresh on decode.
+/// Identity only needs to be stable within one live session (drag targets,
+/// rack reorder); nothing persists tile IDs across launches.
+extension Tile: Codable {
+    private enum CodingKeys: String, CodingKey { case letter, assigned }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard let letter = try container.decode(String.self, forKey: .letter).first else {
+            throw DecodingError.dataCorruptedError(forKey: .letter, in: container,
+                                                   debugDescription: "Empty tile letter")
+        }
+        self.letter = letter
+        self.assignedLetter = try container.decodeIfPresent(String.self, forKey: .assigned)?.first
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(String(letter), forKey: .letter)
+        try container.encodeIfPresent(assignedLetter.map(String.init), forKey: .assigned)
+    }
 }
 
 enum Premium {
