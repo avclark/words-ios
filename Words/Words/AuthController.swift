@@ -23,11 +23,6 @@ final class AuthController {
         case signedOut
         /// Signed in; the value is the stable internal user ID.
         case signedIn(UUID)
-        /// TEMPORARY escape hatch (not a guest mode — no account exists):
-        /// local play without a session, so the app stays usable while the
-        /// Apple Developer membership / Supabase Apple provider are still
-        /// being set up. Remove once the Apple flow is verified.
-        case offline
     }
 
     private(set) var state: State = .loading
@@ -41,8 +36,6 @@ final class AuthController {
     /// so it's captured at credential time and applied once the session lands.
     private var pendingAppleName: String?
 
-    private static let offlineChosenKey = "authOfflineModeChosen"
-
     var signedInUserID: UUID? {
         if case .signedIn(let id) = state { return id }
         return nil
@@ -52,14 +45,18 @@ final class AuthController {
     /// `state`. An expired or revoked session surfaces here as a signed-out
     /// event, not an error — the app just returns to the sign-in screen.
     func start() async {
+        // Phase 6 shipped a temporary "continue offline" bypass while Apple
+        // sign-in couldn't be configured; anyone still carrying its flag
+        // just falls through to the sign-in screen now.
+        UserDefaults.standard.removeObject(forKey: "authOfflineModeChosen")
+
         for await (event, session) in client.auth.authStateChanges {
             switch event {
             case .initialSession, .signedIn, .tokenRefreshed, .userUpdated:
                 if let session {
                     state = .signedIn(session.user.id)
                 } else if state == .loading {
-                    state = UserDefaults.standard.bool(forKey: Self.offlineChosenKey)
-                        ? .offline : .signedOut
+                    state = .signedOut
                 }
             case .signedOut:
                 state = .signedOut
@@ -107,22 +104,9 @@ final class AuthController {
         }
     }
 
-    // MARK: - Offline mode (TEMPORARY — see State.offline)
-
-    func continueOffline() {
-        UserDefaults.standard.set(true, forKey: Self.offlineChosenKey)
-        state = .offline
-    }
-
-    func leaveOfflineMode() {
-        UserDefaults.standard.removeObject(forKey: Self.offlineChosenKey)
-        state = .signedOut
-    }
-
     // MARK: - Sign out & account deletion
 
     func signOut() async {
-        UserDefaults.standard.removeObject(forKey: Self.offlineChosenKey)
         do {
             try await client.auth.signOut()
         } catch {

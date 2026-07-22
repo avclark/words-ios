@@ -38,16 +38,7 @@ struct SignInView: View {
                     .padding(.horizontal, 32)
             }
 
-            // TEMPORARY: keeps the app usable until the Apple provider is
-            // live (developer membership processing). Remove this button —
-            // and AuthController.State.offline — once Apple sign-in works.
-            Button("Continue offline for now") {
-                auth.continueOffline()
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.45))
-            .padding(.top, 4)
-            .padding(.bottom, 28)
+            Spacer().frame(height: 28)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HomeView.background.ignoresSafeArea())

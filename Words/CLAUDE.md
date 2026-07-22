@@ -146,8 +146,9 @@ and the pass chip now always visible (dimmed at 0/6).
   (signInWithIdToken + SHA256 nonce), sign-out, delete-account RPC, server
   profile fetch/merge/push (fresh row seeded from Apple name or local
   profile; established server row wins). SignInView gates the app in
-  RootView; ".offline" is a TEMPORARY no-account escape hatch (persisted
-  in UserDefaults) until the Apple provider is live — remove it after.
+  RootView — Apple sign-in verified working; the temporary offline bypass
+  from the pre-verification window has been removed (its stale UserDefaults
+  flag is cleaned up in AuthController.start()).
   Sign in with Apple entitlement wired (Words/Words.entitlements,
   CODE_SIGN_ENTITLEMENTS) — provisioning accepted it already. Server side:
   supabase/setup.sql (profiles + signup trigger + delete_account RPC —

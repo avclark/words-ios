@@ -244,8 +244,7 @@ private struct ProfileEditorSheet: View {
 
     @ViewBuilder
     private var accountSection: some View {
-        switch auth.state {
-        case .signedIn:
+        if case .signedIn = auth.state {
             VStack(spacing: 12) {
                 Text("Signed in with Apple")
                     .font(.system(size: 12, design: .rounded))
@@ -264,19 +263,6 @@ private struct ProfileEditorSheet: View {
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                 }
             }
-        case .offline:
-            VStack(spacing: 8) {
-                Text("Playing offline — no account")
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
-                Button("Sign in") {
-                    dismiss()
-                    auth.leaveOfflineMode()
-                }
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-            }
-        default:
-            EmptyView()
         }
     }
 }

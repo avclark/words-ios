@@ -31,7 +31,7 @@ struct RootView: View {
                     .background(HomeView.background.ignoresSafeArea())
             case .signedOut:
                 SignInView(auth: auth)
-            case .signedIn, .offline:
+            case .signedIn:
                 gameContent
             }
         }
