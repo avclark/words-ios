@@ -73,6 +73,7 @@ enum RemoteGames {
         let winnerSeat: Int?
         let bagCount: Int?
         let updatedAt: String?
+        let expiresAt: String?
         let players: [PlayerDTO]
         let moves: [MoveDTO]?
         let importLog: [String]?
@@ -87,10 +88,12 @@ enum RemoteGames {
             case winnerSeat = "winner_seat"
             case bagCount = "bag_count"
             case updatedAt = "updated_at"
+            case expiresAt = "expires_at"
             case importLog = "import_log"
         }
 
         var updatedDate: Date? { RemoteGames.parseTimestamp(updatedAt) }
+        var expiresDate: Date? { RemoteGames.parseTimestamp(expiresAt) }
     }
 
     struct CreateResult: Decodable {
@@ -112,15 +115,21 @@ enum RemoteGames {
         let drawn: [String]
         let bagCount: Int
         let turnNumber: Int
+        /// True when p_op_id matched an already-applied move (a replayed op
+        /// from the persisted queue); `rack` then carries the seat's
+        /// CURRENT rack so the client can reconcile a refill it never saw.
+        let duplicate: Bool?
+        let rack: [String]?
 
         enum CodingKeys: String, CodingKey {
-            case drawn
+            case drawn, duplicate, rack
             case bagCount = "bag_count"
             case turnNumber = "turn_number"
         }
     }
 
-    struct SubmitParams: Encodable {
+    /// Codable so pending ops survive force-quit in the on-disk journal.
+    struct SubmitParams: Codable {
         let p_game_id: UUID
         let p_seat: Int
         let p_kind: String
@@ -128,6 +137,36 @@ enum RemoteGames {
         let p_word: String?
         let p_client_score: Int?
         let p_swap_letters: [String]?
+        /// Idempotency key: the server applies each op id at most once.
+        let p_op_id: UUID?
+    }
+
+    struct RematchResult: Decodable {
+        struct Opponent: Decodable {
+            let userID: UUID
+            let displayName: String
+            let avatar: String?
+
+            enum CodingKeys: String, CodingKey {
+                case avatar
+                case userID = "user_id"
+                case displayName = "display_name"
+            }
+        }
+        let gameID: UUID
+        let created: Bool
+        let mySeat: Int
+        let myRack: [String]
+        let bagCount: Int
+        let opponent: Opponent
+
+        enum CodingKeys: String, CodingKey {
+            case created, opponent
+            case gameID = "game_id"
+            case mySeat = "my_seat"
+            case myRack = "my_rack"
+            case bagCount = "bag_count"
+        }
     }
 
     struct FriendDTO: Decodable, Identifiable, Equatable {
@@ -278,6 +317,22 @@ enum RemoteGames {
             .execute()
     }
 
+    static func resign(gameID: UUID) async throws {
+        struct P: Encodable { let p_game_id: UUID }
+        _ = try await SupabaseService.client
+            .rpc("resign_game", params: P(p_game_id: gameID))
+            .execute()
+    }
+
+    /// Creates — or joins — THE one rematch game for a finished game.
+    /// Both players tapping resolves to the same game server-side.
+    static func requestRematch(gameID: UUID) async throws -> RematchResult {
+        struct P: Encodable { let p_game_id: UUID }
+        return try await SupabaseService.client
+            .rpc("request_rematch", params: P(p_game_id: gameID))
+            .execute().value
+    }
+
     static func fetchLobby() async throws -> [GameDTO] {
         try await SupabaseService.client
             .rpc("fetch_lobby")
@@ -347,6 +402,7 @@ enum RemoteGames {
         case .localEmptied, .opponentEmptied: reason = "emptied"
         case .sixPasses: reason = "six_passes"
         case .resigned: reason = "resigned"
+        case .expired: reason = "expired"  // unreachable for legacy imports
         }
         let winner: Int? = over.localFinal == over.opponentFinal ? nil
             : (over.localFinal > over.opponentFinal ? 0 : 1)

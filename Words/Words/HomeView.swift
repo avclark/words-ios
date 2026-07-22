@@ -162,6 +162,11 @@ private struct GameRow: View {
                 Text(game.updatedAt.formatted(.relative(presentation: .named)))
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.white.opacity(0.35))
+                if let expiry = expiryWarning {
+                    Text(expiry)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.orange.opacity(0.85))
+                }
             }
         }
         .padding(.vertical, 6)
@@ -187,9 +192,23 @@ private struct GameRow: View {
 
     private var finishedLabel: String {
         guard let over = game.gameOver else { return "FINISHED" }
+        if over.reason == .expired { return "EXPIRED" }
+        if let localWon = over.localWon { return localWon ? "YOU WON" : "YOU LOST" }
         if over.localFinal > over.opponentFinal { return "YOU WON" }
         if over.localFinal < over.opponentFinal { return "YOU LOST" }
         return "TIED"
+    }
+
+    /// Deadline nudge for active human games — visible well before the
+    /// warn-then-expire flow fires, so expiry is never a surprise.
+    private var expiryWarning: String? {
+        guard game.gameOver == nil, game.opponentIsHuman == true,
+              let expiresAt = game.expiresAt else { return nil }
+        let remaining = expiresAt.timeIntervalSinceNow
+        guard remaining < 3 * 86_400 else { return nil }
+        if remaining <= 0 { return "expiring" }
+        if remaining < 86_400 { return "expires today" }
+        return "expires in \(Int(remaining / 86_400))d"
     }
 }
 

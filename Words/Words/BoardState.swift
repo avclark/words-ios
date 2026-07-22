@@ -13,7 +13,7 @@ enum PlayStatus: Equatable {
 /// opponent's leftovers.
 struct GameOverSummary: Equatable, Codable {
     enum Reason: String, Equatable, Codable {
-        case localEmptied, opponentEmptied, sixPasses, resigned
+        case localEmptied, opponentEmptied, sixPasses, resigned, expired
     }
     let reason: Reason
     let localFinal: Int
@@ -21,6 +21,9 @@ struct GameOverSummary: Equatable, Codable {
     /// Face value of tiles left on each rack when the game ended.
     let localLeftover: Int
     let opponentLeftover: Int
+    /// Explicit winner for outcomes where scores don't decide it (resign,
+    /// expiry — the higher scorer can still lose). Nil = derive from scores.
+    var localWon: Bool? = nil
 }
 
 /// Whose turn it is. `.opponent` covers the whole time the other side holds
@@ -62,6 +65,7 @@ final class BoardState {
     }
     var onRemoteMove: ((BoardState, RemoteMove) -> Void)?
     var onGameFinished: ((BoardState, GameOverSummary) -> Void)?
+    var onResigned: ((BoardState) -> Void)?
 
     /// Phase 7 remote seam. Non-nil means this game's bag lives on the
     /// server: the client never draws tiles locally; refills arrive via
@@ -75,6 +79,9 @@ final class BoardState {
     /// Phase 8: the opponent seat is a remote human — no local engine runs;
     /// the turn resolves when the server shows their move.
     private(set) var opponentIsHuman: Bool = false
+    /// Phase 9: server inactivity deadline (human games only). Reset by
+    /// every move; shown in the UI so expiry is never a surprise.
+    private(set) var expiresAt: Date?
     /// The one source for "tiles left" — server-authoritative for remote
     /// games, the local bag for legacy/local games (and unit tests).
     var bagRemaining: Int { remoteBagCount ?? bag.count }
@@ -157,11 +164,13 @@ final class BoardState {
          localProfile: PlayerProfile, difficulty: AIDifficulty,
          opponentProfile: PlayerProfile = .ai,
          opponentIsHuman: Bool = false,
-         opponentRack: [Tile] = []) {
+         opponentRack: [Tile] = [],
+         localSeat: Int = 0) {
         self.gameID = remoteID
         self.createdAt = Date()
         self.difficulty = difficulty
         self.opponentIsHuman = opponentIsHuman
+        self.localSeat = localSeat
         self.opponentEngine = LocalAIOpponent(difficulty: difficulty)
         _ = Lexicon.words
         remoteBagCount = bagCount
@@ -190,6 +199,7 @@ final class BoardState {
         remoteBagCount = saved.bagCount
         localSeat = saved.localSeat ?? 0
         opponentIsHuman = saved.opponentIsHuman ?? false
+        expiresAt = saved.expiresAt
         if !opponentIsHuman { AIPlayer.warmUp() }
     }
 
@@ -213,6 +223,7 @@ final class BoardState {
                   bagCount: remoteBagCount,
                   localSeat: localSeat,
                   opponentIsHuman: opponentIsHuman,
+                  expiresAt: expiresAt,
                   committed: committed,
                   placed: placed,
                   pendingBlank: pendingBlank,
@@ -568,7 +579,7 @@ final class BoardState {
         switch reason {
         case .localEmptied: players[localIndex].score += oppLeft
         case .opponentEmptied: players[opponentIndex].score += localLeft
-        case .sixPasses, .resigned: break
+        case .sixPasses, .resigned, .expired: break
         }
         let summary = GameOverSummary(reason: reason,
                                       localFinal: players[localIndex].score,
@@ -587,6 +598,40 @@ final class BoardState {
         guard isRemote, players.indices.contains(seat) else { return }
         remoteBagCount = bagCount
         players[seat].rack.append(contentsOf: letters)
+        onAutosave?(self)
+    }
+
+    /// Local player concedes (human games only). Ends locally at the
+    /// current scores — no leftover math, the resigner simply loses — and
+    /// reports for background sync via onResigned.
+    func resignLocalPlayer() {
+        guard gameOver == nil, isRemote, opponentIsHuman else { return }
+        recallAll()
+        turnState = .local
+        status = nil
+        log("\(localPlayer.profile.displayName) resigned")
+        gameOver = GameOverSummary(reason: .resigned,
+                                   localFinal: players[localIndex].score,
+                                   opponentFinal: players[opponentIndex].score,
+                                   localLeftover: 0,
+                                   opponentLeftover: 0,
+                                   localWon: false)
+        onResigned?(self)
+        onAutosave?(self)
+    }
+
+    /// Full rack replacement from the server — used when a replayed op
+    /// turns out to have already been applied (the refill was never
+    /// received). The server rack is the complete truth of the seat's
+    /// tiles, so any tentative local placement folds back into it.
+    func applyAuthoritativeRack(seat: Int, letters: [Tile], bagCount: Int) {
+        guard isRemote, players.indices.contains(seat) else { return }
+        remoteBagCount = bagCount
+        if seat == 0 {
+            placed = [:]
+            pendingBlank = nil
+        }
+        players[seat].rack = letters
         onAutosave?(self)
     }
 
@@ -610,6 +655,7 @@ final class BoardState {
         turnNumber = saved.turnNumber
         consecutivePasses = saved.consecutivePasses
         remoteBagCount = saved.bagCount ?? remoteBagCount
+        expiresAt = saved.expiresAt ?? expiresAt
         turnState = saved.turnState
         if scoreDelta > 0 {
             log("\(opponent.profile.displayName) played +\(scoreDelta)")

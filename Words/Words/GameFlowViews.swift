@@ -58,10 +58,16 @@ struct GameOverView: View {
     let summary: GameOverSummary
     let localName: String
     let opponentName: String
+    var newGameLabel: String = "New Game"
     let onHome: () -> Void
     let onNewGame: () -> Void
 
     private var winnerText: String {
+        // Resign/expiry carry an explicit winner — the higher scorer can
+        // still be the loser there.
+        if let localWon = summary.localWon {
+            return localWon ? "You win!" : "\(opponentName) wins"
+        }
         if summary.localFinal > summary.opponentFinal { return "You win!" }
         if summary.localFinal < summary.opponentFinal { return "\(opponentName) wins" }
         return "It's a tie"
@@ -73,6 +79,7 @@ struct GameOverView: View {
         case .opponentEmptied: return "\(opponentName) played all their tiles"
         case .sixPasses: return "Six passes in a row"
         case .resigned: return "The game ended by resignation"
+        case .expired: return "The game expired after inactivity"
         }
     }
 
@@ -84,7 +91,7 @@ struct GameOverView: View {
             return "\(opponentName) gains +\(summary.localLeftover) from your leftover tiles (you −\(summary.localLeftover))"
         case .sixPasses:
             return "Leftover tiles: you −\(summary.localLeftover), \(opponentName) −\(summary.opponentLeftover)"
-        case .resigned:
+        case .resigned, .expired:
             return "Final scores as they stood"
         }
     }
@@ -104,7 +111,7 @@ struct GameOverView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            Button("New Game", action: onNewGame)
+            Button(newGameLabel, action: onNewGame)
                 .buttonStyle(.borderedProminent)
             Button("Home", action: onHome)
         }

@@ -6,3 +6,4 @@
 - After Phase 5 - Now I don't have a way to set my name becuase when I open the app it goes right to the game lobby.
 - Rearrange buttons at the bottom of the screen to make the play button centered. Shuffle and recal on the left, swap and pass on the right. Or just a big centered play button with other options behind a menu. Need to think through this especially when we add in hints/helpers.
 - pull to refresh
+- passing should pop up a dialog to confirm, bc it's too easy to accidentally tap

@@ -13,6 +13,7 @@ struct GameView: View {
 
     @State private var drag = DragController()
     @State private var showSwapSheet = false
+    @State private var confirmingResign = false
 
     var body: some View {
         GeometryReader { geo in
@@ -30,6 +31,9 @@ struct GameView: View {
                                passes: state.consecutivePasses,
                                logLine: state.moveLog.last,
                                rejection: rejectionText,
+                               expiresAt: state.gameOver == nil ? state.expiresAt : nil,
+                               onResign: state.opponentIsHuman && state.gameOver == nil
+                                   ? { confirmingResign = true } : nil,
                                onBack: { onExit?() })
 
                 Spacer(minLength: 0)
@@ -62,9 +66,22 @@ struct GameView: View {
                     GameOverView(summary: summary,
                                  localName: state.localPlayer.profile.displayName,
                                  opponentName: state.opponent.profile.displayName,
+                                 newGameLabel: state.opponentIsHuman ? "Rematch" : "New Game",
                                  onHome: { onExit?() },
                                  onNewGame: { onNewGame?() })
                 }
+            }
+            .confirmationDialog("Resign this game?",
+                                isPresented: $confirmingResign,
+                                titleVisibility: .visible) {
+                Button("Resign — \(state.opponent.profile.displayName) wins", role: .destructive) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        state.resignLocalPlayer()
+                    }
+                }
+                Button("Keep playing", role: .cancel) {}
+            } message: {
+                Text("The game ends immediately and counts as a loss.")
             }
         }
         .coordinateSpace(name: Self.spaceName)

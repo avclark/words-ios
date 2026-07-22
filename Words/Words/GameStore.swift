@@ -19,6 +19,8 @@ struct SavedGame: Identifiable, Codable {
     var localSeat: Int?
     /// Phase 8: opponent seat is a remote human (nil = false → AI).
     var opponentIsHuman: Bool?
+    /// Phase 9: server inactivity deadline (human games; nil = none).
+    var expiresAt: Date?
 
     var committed: [BoardCoord: Tile]
     /// Tiles tentatively placed this turn — preserved so quitting mid-move
@@ -54,7 +56,9 @@ struct SavedGame: Identifiable, Codable {
 @Observable
 final class GameStore {
     private(set) var games: [SavedGame] = []
-    private let directory: URL
+    /// Exposed so GameSync can keep its pending-op journal alongside the
+    /// game cache (same per-account directory, same lifecycle).
+    let directory: URL
 
     init(directory: URL? = nil) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory,

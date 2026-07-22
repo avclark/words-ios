@@ -225,9 +225,35 @@ and the pass chip now always visible (dimmed at 0/6).
   NOTE: SUPABASE_SECRET_KEY lives in ~/.zshrc — `source ~/.zshrc` before
   running verify scripts (non-interactive shells don't load it).
 
-**Next:** paste phase8b_account_deletion.sql, re-run verify_phase8.sh
-(step 8 must go green), device-test Phase 8 (second account on the
-simulator for human-vs-human). Then Phase 9 — async multiplayer end to end.
+- Phase 9: multiplayer robustness (supabase/phase9_robustness.sql — paste
+  AFTER phase8b). Persisted op queue: GameSync journals every op
+  (submit/resign/finish) to Games/<uid>/pending-ops.json BEFORE first
+  attempt, removes on success/terminal rejection; flushPending() on
+  launch + foreground (ALWAYS before any pull — order prevents rollback
+  of unpushed optimistic state). Idempotency: submit_move p_op_id +
+  moves.client_op_id unique — a replayed already-applied op returns
+  duplicate:true + the seat's CURRENT rack; client reconciles via
+  applyAuthoritativeRack (folds tentative placements back in). Rejection
+  → drop the game's queued ops + rollback + alert naming the opponent.
+  Expiry: 14-day inactivity window (friends-and-family pace — expiry is
+  garbage collection, not churn pressure), warn at <24h, expire only
+  after the warning has stood 24h; human-vs-human only (solo AI games
+  never expire); inactive player forfeits (winner = other seat);
+  process_game_expiry() hourly via pg_cron (guarded — if pg_cron missing,
+  schedule externally); Phase 10 push hooks on expiry_warned_at
+  transitions. Deadline visible: lobby row ("expires in Nd") + header
+  clock chip when <3 days. Resign: flag button in game header (human
+  games), confirmation dialog, explicit loss regardless of score
+  (GameOverSummary.localWon overrides score comparison — also used for
+  expiry). Rematch: request_rematch RPC — unique index on rematch_of +
+  row lock = both-players-tap yields ONE game; creator seat 0, joiner
+  seat 1 (BoardState localSeat init param). Sync: kept polling over
+  Supabase realtime (async game, battery, simplicity; revisit when
+  Phase 11 chat needs realtime anyway) — 10s waiting / 30s own turn,
+  poll dies with the screen. 25 unit tests.
+
+**Next:** paste phase9_robustness.sql, run verify_phase9.sh (all steps
+must pass), device-test Phase 9. Then Phase 10 — push notifications.
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

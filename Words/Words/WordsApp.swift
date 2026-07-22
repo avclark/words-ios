@@ -62,6 +62,9 @@ struct RootView: View {
                 store?.save(activeGame.snapshot())
             }
             if phase == .active, let sync {
+                // Order matters: push our queued moves BEFORE pulling, so
+                // a pull can't roll back state that has ops still waiting.
+                sync.flushPending()
                 Task { await sync.refreshLobby() }
             }
         }
@@ -89,14 +92,17 @@ struct RootView: View {
         .onOpenURL { url in
             handleInviteURL(url)
         }
-        // A live human-vs-human game has no local engine: poll while it's
-        // the opponent's turn so their move lands without leaving the board.
+        // A live human-vs-human game has no local engine: poll so their
+        // move — or a resignation/expiry — lands without leaving the board.
+        // 10s while waiting on them, 30s on our own turn; the task dies
+        // with the screen, so backgrounded apps never poll.
         .task(id: activeGame?.gameID) {
             guard let game = activeGame, game.opponentIsHuman else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                let seconds: UInt64 = game.waitingForOpponent ? 10 : 30
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                if game.waitingForOpponent {
+                if game.gameOver == nil {
                     await sync?.refreshActiveGame(game)
                 }
             }
@@ -203,6 +209,9 @@ struct RootView: View {
                 profile = merged
                 LocalProfile.save(merged)
             }
+            // Queued ops from a force-quit session go up BEFORE anything
+            // pulls, so the pull can't roll back their optimistic state.
+            newSync.flushPending()
             await newSync.migrateLocalGames()
             await newSync.refreshLobby()
             await friends?.refresh()
@@ -274,9 +283,25 @@ struct RootView: View {
     }
 
     private func rematch() {
-        let difficulty = activeGame?.difficulty ?? .medium
-        closeActiveGame()
-        start(difficulty: difficulty)
+        guard let game = activeGame else { return }
+        if game.opponentIsHuman {
+            guard let sync, let store else { return }
+            Task {
+                do {
+                    let fresh = try await sync.rematch(from: game, profile: startableProfile)
+                    closeActiveGame()
+                    wire(fresh)
+                    store.save(fresh.snapshot())
+                    activeGame = fresh
+                } catch {
+                    startError = "Couldn't start the rematch — check your connection and try again."
+                }
+            }
+        } else {
+            let difficulty = game.difficulty
+            closeActiveGame()
+            start(difficulty: difficulty)
+        }
     }
 
     // MARK: - Profile

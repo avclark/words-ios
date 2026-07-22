@@ -22,14 +22,76 @@ final class GameSync {
     /// server state. RootView presents it and reloads the live game.
     var rejection: Rejection?
 
+    /// A durable operation: journaled to disk before its first submission
+    /// attempt and removed only on success or terminal rejection, so a
+    /// force-quit can never lose a played move (the Phase 7 gap).
+    struct PendingOp: Codable, Identifiable {
+        enum Kind: String, Codable { case submit, resign, finish }
+        let id: UUID
+        let gameID: UUID
+        let kind: Kind
+        var submit: RemoteGames.SubmitParams?
+        /// Local-perspective seat of a submit, for applying the draw.
+        var localSeatIndex: Int?
+        var finish: FinishPayload?
+    }
+
+    struct FinishPayload: Codable {
+        let reason: String
+        let scoreServerSeat0: Int
+        let scoreServerSeat1: Int
+        let winnerServerSeat: Int?
+    }
+
     private let store: GameStore
     private let userID: UUID
     /// Tail of the op chain per game — each new op awaits the previous one.
     private var chains: [UUID: Task<Void, Never>] = [:]
+    /// The durable queue, mirrored at journalURL. Order is submission order.
+    private var journal: [PendingOp] = []
+    private var inFlight: Set<UUID> = []
+    private weak var activeBoard: BoardState?
+
+    private var journalURL: URL {
+        store.directory.appendingPathComponent("pending-ops.json")
+    }
+
+    /// Ops waiting to reach the server (for tests and future UI).
+    var pendingOpCount: Int { journal.count }
 
     init(store: GameStore, userID: UUID) {
         self.store = store
         self.userID = userID
+        if let data = try? Data(contentsOf: journalURL),
+           let saved = try? JSONDecoder().decode([PendingOp].self, from: data) {
+            journal = saved
+        }
+    }
+
+    /// Re-submit every journaled op (launch, foreground). Ops already in
+    /// flight are skipped; per-game FIFO order is preserved.
+    func flushPending() {
+        for op in journal where !inFlight.contains(op.id) {
+            chain(op)
+        }
+    }
+
+    private func persistJournal() {
+        if journal.isEmpty {
+            try? FileManager.default.removeItem(at: journalURL)
+        } else if let data = try? JSONEncoder().encode(journal) {
+            try? data.write(to: journalURL, options: .atomic)
+        }
+    }
+
+    private func complete(_ op: PendingOp) {
+        journal.removeAll { $0.id == op.id }
+        persistJournal()
+    }
+
+    private func dropOps(for gameID: UUID) {
+        journal.removeAll { $0.gameID == gameID }
+        persistJournal()
     }
 
     // MARK: - Wiring
@@ -37,12 +99,20 @@ final class GameSync {
     /// Hook a live game's turn events into the sync queue.
     func attach(_ board: BoardState) {
         guard board.isRemote else { return }
+        activeBoard = board
         board.onRemoteMove = { [weak self] state, move in
             self?.enqueueMove(move, from: state)
         }
         board.onGameFinished = { [weak self] state, summary in
             self?.enqueueFinish(state: state, summary: summary)
         }
+        board.onResigned = { [weak self] state in
+            self?.enqueueResign(state)
+        }
+    }
+
+    private func boardFor(_ gameID: UUID) -> BoardState? {
+        activeBoard?.gameID == gameID ? activeBoard : nil
     }
 
     // MARK: - Game creation
@@ -86,67 +156,114 @@ final class GameSync {
     // MARK: - Move pipeline
 
     private func enqueueMove(_ move: BoardState.RemoteMove, from board: BoardState) {
-        let gameID = board.gameID
-        let params = Self.submitParams(gameID: gameID, localSeat: board.localSeat, move: move)
-        enqueue(gameID: gameID) { [weak self, weak board] in
-            await self?.submit(params: params, seat: move.seat, gameID: gameID, board: board)
-        }
+        let opID = UUID()
+        let params = Self.submitParams(gameID: board.gameID, localSeat: board.localSeat,
+                                       move: move, opID: opID)
+        let op = PendingOp(id: opID, gameID: board.gameID, kind: .submit,
+                           submit: params, localSeatIndex: move.seat, finish: nil)
+        journal.append(op)
+        persistJournal()
+        chain(op)
+    }
+
+    private func enqueueResign(_ board: BoardState) {
+        let op = PendingOp(id: UUID(), gameID: board.gameID, kind: .resign,
+                           submit: nil, localSeatIndex: nil, finish: nil)
+        journal.append(op)
+        persistJournal()
+        chain(op)
     }
 
     private func enqueueFinish(state board: BoardState, summary: GameOverSummary) {
-        let gameID = board.gameID
         let localSeat = board.localSeat
         let reason: String
         switch summary.reason {
         case .localEmptied, .opponentEmptied: reason = "emptied"
         case .sixPasses: reason = "six_passes"
         case .resigned: reason = "resigned"
+        case .expired: return  // expiry is decided server-side, never pushed up
         }
         // Local perspective → server seats.
-        let winnerLocal: Int? = summary.localFinal == summary.opponentFinal ? nil
-            : (summary.localFinal > summary.opponentFinal ? 0 : 1)
-        let winnerServer = winnerLocal.map { $0 == 0 ? localSeat : 1 - localSeat }
-        let scoreForServerSeat0 = localSeat == 0 ? summary.localFinal : summary.opponentFinal
-        let scoreForServerSeat1 = localSeat == 0 ? summary.opponentFinal : summary.localFinal
-        enqueue(gameID: gameID) {
-            try? await RemoteGames.finish(gameID: gameID, reason: reason,
-                                          localFinal: scoreForServerSeat0,
-                                          opponentFinal: scoreForServerSeat1,
-                                          winnerSeat: winnerServer)
-        }
+        let winnerLocal: Int? = summary.localWon.map { $0 ? 0 : 1 }
+            ?? (summary.localFinal == summary.opponentFinal ? nil
+                : (summary.localFinal > summary.opponentFinal ? 0 : 1))
+        let payload = FinishPayload(
+            reason: reason,
+            scoreServerSeat0: localSeat == 0 ? summary.localFinal : summary.opponentFinal,
+            scoreServerSeat1: localSeat == 0 ? summary.opponentFinal : summary.localFinal,
+            winnerServerSeat: winnerLocal.map { $0 == 0 ? localSeat : 1 - localSeat })
+        let op = PendingOp(id: UUID(), gameID: board.gameID, kind: .finish,
+                           submit: nil, localSeatIndex: nil, finish: payload)
+        journal.append(op)
+        persistJournal()
+        chain(op)
     }
 
-    private func enqueue(gameID: UUID, op: @escaping () async -> Void) {
-        let previous = chains[gameID]
-        chains[gameID] = Task {
+    private func chain(_ op: PendingOp) {
+        guard !inFlight.contains(op.id) else { return }
+        inFlight.insert(op.id)
+        let previous = chains[op.gameID]
+        chains[op.gameID] = Task {
             await previous?.value
-            await op()
+            await perform(op)
+            inFlight.remove(op.id)
         }
     }
 
-    private func submit(params: RemoteGames.SubmitParams, seat: Int,
-                        gameID: UUID, board: BoardState?) async {
+    private func perform(_ op: PendingOp) async {
+        switch op.kind {
+        case .submit: await performSubmit(op)
+        case .resign: await performResign(op)
+        case .finish: await performFinish(op)
+        }
+    }
+
+    private func performSubmit(_ op: PendingOp) async {
+        guard let params = op.submit, let seat = op.localSeatIndex else {
+            complete(op)
+            return
+        }
         var attempt = 0
         while true {
             do {
                 let result = try await RemoteGames.submit(params)
-                let tiles = RemoteGames.tiles(fromRack: result.drawn)
-                if let board, board.gameID == gameID {
-                    board.applyServerDraw(seat: seat, letters: tiles,
-                                          bagCount: result.bagCount)
+                let board = boardFor(op.gameID)
+                if result.duplicate == true {
+                    // This op already landed (we force-quit before hearing
+                    // back). Reconcile the refill we never received: the
+                    // server rack is the whole truth for the seat.
+                    if let rackLetters = result.rack {
+                        let tiles = RemoteGames.tiles(fromRack: rackLetters)
+                        if let board {
+                            board.applyAuthoritativeRack(seat: seat, letters: tiles,
+                                                         bagCount: result.bagCount)
+                        } else {
+                            applyRackToCache(gameID: op.gameID, seat: seat,
+                                             letters: tiles, bagCount: result.bagCount)
+                        }
+                    }
                 } else {
-                    // Game screen already closed: fold the refill into the cache.
-                    applyDrawToCache(gameID: gameID, seat: seat, letters: tiles,
-                                     bagCount: result.bagCount)
+                    let tiles = RemoteGames.tiles(fromRack: result.drawn)
+                    if let board {
+                        board.applyServerDraw(seat: seat, letters: tiles,
+                                              bagCount: result.bagCount)
+                    } else {
+                        applyDrawToCache(gameID: op.gameID, seat: seat,
+                                         letters: tiles, bagCount: result.bagCount)
+                    }
                 }
+                complete(op)
                 return
             } catch let error as PostgrestError {
-                await rollback(gameID: gameID, serverMessage: error.message)
+                // Terminal: this op — and everything queued behind it,
+                // which builds on it — will never be accepted.
+                dropOps(for: op.gameID)
+                await rollback(gameID: op.gameID, serverMessage: error.message)
                 return
             } catch {
-                // Network trouble: retry briefly, then leave the op behind.
-                // The optimistic local state stands; the next lobby refresh
-                // reconciles against whatever the server last accepted.
+                // Network trouble: retry briefly, then leave the op in the
+                // journal — it survives force-quit and retries on the next
+                // launch/foreground (idempotent via p_op_id).
                 attempt += 1
                 if attempt >= 3 { return }
                 try? await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
@@ -154,10 +271,54 @@ final class GameSync {
         }
     }
 
+    private func performResign(_ op: PendingOp) async {
+        do {
+            try await RemoteGames.resign(gameID: op.gameID)
+            complete(op)
+        } catch is PostgrestError {
+            // Already over server-side (opponent finished/resigned first,
+            // or a replay) — nothing left to do.
+            complete(op)
+        } catch {
+            // Network: stays journaled for the next flush.
+        }
+    }
+
+    private func performFinish(_ op: PendingOp) async {
+        guard let payload = op.finish else {
+            complete(op)
+            return
+        }
+        do {
+            try await RemoteGames.finish(gameID: op.gameID, reason: payload.reason,
+                                         localFinal: payload.scoreServerSeat0,
+                                         opponentFinal: payload.scoreServerSeat1,
+                                         winnerSeat: payload.winnerServerSeat)
+            complete(op)
+        } catch is PostgrestError {
+            complete(op)  // finish_game is idempotent; a rejection is terminal
+        } catch {
+            // Network: stays journaled for the next flush.
+        }
+    }
+
     private func applyDrawToCache(gameID: UUID, seat: Int, letters: [Tile], bagCount: Int) {
         guard var saved = store.games.first(where: { $0.id == gameID }),
               saved.players.indices.contains(seat) else { return }
         saved.players[seat].rack.append(contentsOf: letters)
+        saved.bagCount = bagCount
+        saved.updatedAt = Date()
+        store.save(saved)
+    }
+
+    private func applyRackToCache(gameID: UUID, seat: Int, letters: [Tile], bagCount: Int) {
+        guard var saved = store.games.first(where: { $0.id == gameID }),
+              saved.players.indices.contains(seat) else { return }
+        saved.players[seat].rack = letters
+        if seat == 0 {
+            saved.placed = [:]
+            saved.pendingBlank = nil
+        }
         saved.bagCount = bagCount
         saved.updatedAt = Date()
         store.save(saved)
@@ -172,22 +333,26 @@ final class GameSync {
         }
         chains[gameID]?.cancel()
         chains[gameID] = nil
+        let opponent = store.games.first { $0.id == gameID }?
+            .players[1].profile.displayName
         rejection = Rejection(gameID: gameID,
-                              message: Self.friendlyMessage(serverMessage))
+                              message: Self.friendlyMessage(serverMessage,
+                                                            opponent: opponent))
     }
 
-    private static func friendlyMessage(_ raw: String) -> String {
+    private static func friendlyMessage(_ raw: String, opponent: String?) -> String {
+        let game = opponent.map { "your game with \($0)" } ?? "the game"
         switch raw {
         case "not_your_turn":
-            return "The server says it wasn't your turn — the game has been restored to the server's state."
+            return "A move in \(game) couldn't sync — the server had already moved on (your opponent may have played first). The board has been restored to the server's state."
         case "tiles_not_in_rack":
-            return "The server says those tiles weren't in the rack — the game has been restored to the server's state."
+            return "A move in \(game) couldn't sync — the server says those tiles weren't in the rack. The board has been restored to the server's state."
         case "cell_occupied":
-            return "The server says a square was already taken — the game has been restored to the server's state."
+            return "A move in \(game) couldn't sync — a square was already taken. The board has been restored to the server's state."
         case "game_not_active":
-            return "This game has already ended on the server."
+            return "A move in \(game) couldn't sync because the game has already ended (finished, resigned, or expired). The final state is shown."
         default:
-            return "The server rejected the move (\(raw)) — the game has been restored to the server's state."
+            return "A move in \(game) was rejected by the server (\(raw)). The board has been restored to the server's state."
         }
     }
 
@@ -237,25 +402,46 @@ final class GameSync {
 
     // MARK: - DTO ↔ SavedGame
 
+    /// One-tap rematch: server creates or joins THE single rematch game.
+    func rematch(from board: BoardState, profile: PlayerProfile) async throws -> BoardState {
+        let result = try await RemoteGames.requestRematch(gameID: board.gameID)
+        let opponentProfile = PlayerProfile(
+            id: result.opponent.userID,
+            displayName: result.opponent.displayName,
+            avatar: Avatar(rawValue: result.opponent.avatar ?? "") ?? .star)
+        return BoardState(remoteID: result.gameID,
+                          myRack: RemoteGames.tiles(fromRack: result.myRack),
+                          bagCount: result.bagCount,
+                          localProfile: profile,
+                          difficulty: board.difficulty,
+                          opponentProfile: opponentProfile,
+                          opponentIsHuman: true,
+                          opponentRack: [],
+                          localSeat: result.mySeat)
+    }
+
     /// BoardState speaks local-perspective seats (0 = me); the server wants
     /// real seats. Challenge recipients sit in server seat 1, so the two
     /// numberings differ exactly when localSeat == 1.
     static func submitParams(gameID: UUID, localSeat: Int,
-                             move: BoardState.RemoteMove) -> RemoteGames.SubmitParams {
+                             move: BoardState.RemoteMove,
+                             opID: UUID? = nil) -> RemoteGames.SubmitParams {
         let serverSeat = move.seat == 0 ? localSeat : 1 - localSeat
         switch move.kind {
         case .play(let placements, let word, let score):
             return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "play",
                          p_placements: RemoteGames.placements(from: placements),
-                         p_word: word, p_client_score: score, p_swap_letters: nil)
+                         p_word: word, p_client_score: score, p_swap_letters: nil,
+                         p_op_id: opID)
         case .pass:
             return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "pass",
                          p_placements: nil, p_word: nil, p_client_score: nil,
-                         p_swap_letters: nil)
+                         p_swap_letters: nil, p_op_id: opID)
         case .swap(let tiles):
             return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "swap",
                          p_placements: nil, p_word: nil, p_client_score: nil,
-                         p_swap_letters: tiles.map { String($0.letter) })
+                         p_swap_letters: tiles.map { String($0.letter) },
+                         p_op_id: opID)
         }
     }
 
@@ -298,14 +484,18 @@ final class GameSync {
             switch (dto.endReason, dto.winnerSeat) {
             case ("six_passes", _): reason = .sixPasses
             case ("resigned", _): reason = .resigned
+            case ("expired", _): reason = .expired
             case (_, .some(let w)): reason = w == localSeat ? .localEmptied : .opponentEmptied
             default: reason = .sixPasses
             }
-            // Leftover detail isn't stored server-side; finals are.
+            // Leftover detail isn't stored server-side; finals are. The
+            // explicit winner matters for resign/expiry, where the higher
+            // scorer can still lose.
             gameOver = GameOverSummary(reason: reason,
                                        localFinal: players[0].score,
                                        opponentFinal: players[1].score,
-                                       localLeftover: 0, opponentLeftover: 0)
+                                       localLeftover: 0, opponentLeftover: 0,
+                                       localWon: dto.winnerSeat.map { $0 == localSeat })
         }
 
         var log = dto.importLog ?? []
@@ -331,6 +521,7 @@ final class GameSync {
             bagCount: dto.bagCount ?? 0,
             localSeat: localSeat,
             opponentIsHuman: opponentIsHuman,
+            expiresAt: opponentIsHuman ? dto.expiresDate : nil,
             committed: RemoteGames.committed(fromBoard: dto.board ?? [:]),
             placed: [:],
             pendingBlank: nil,

@@ -11,6 +11,11 @@ struct GameHeaderView: View {
     let passes: Int
     let logLine: String?
     let rejection: String?
+    /// Inactivity deadline (human games) — surfaced when under 3 days so
+    /// expiry is never a surprise.
+    var expiresAt: Date? = nil
+    /// Present only when resigning makes sense (active human game).
+    var onResign: (() -> Void)? = nil
     let onBack: () -> Void
 
     var body: some View {
@@ -39,13 +44,28 @@ struct GameHeaderView: View {
                         // turns; dimmed at 0, lit while a pass streak is live.
                         chip(icon: "forward.end.fill", text: "\(passes)/6",
                              tint: passes > 0 ? .orange : .white.opacity(0.3))
+                        if let deadline = expiryText {
+                            chip(icon: "clock.fill", text: deadline.text,
+                                 tint: deadline.urgent ? .orange : .white.opacity(0.6))
+                        }
                     }
                 }
 
                 Spacer(minLength: 4)
 
                 PlayerBadge(player: opponent, isActive: turnState == .opponent, trailing: true)
-                    .padding(.trailing, 12)
+                    .padding(.trailing, onResign == nil ? 12 : 0)
+
+                if let onResign {
+                    Button(action: onResign) {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .frame(width: 26, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .padding(.trailing, 6)
+                }
             }
             .padding(.leading, 4)
 
@@ -67,6 +87,15 @@ struct GameHeaderView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
         }
+    }
+
+    private var expiryText: (text: String, urgent: Bool)? {
+        guard let expiresAt else { return nil }
+        let remaining = expiresAt.timeIntervalSinceNow
+        guard remaining < 3 * 86_400 else { return nil }
+        if remaining <= 0 { return ("expiring", true) }
+        if remaining < 86_400 { return ("\(max(1, Int(remaining / 3600)))h", true) }
+        return ("\(Int(remaining / 86_400))d", false)
     }
 
     private func chip(icon: String, text: String, tint: Color = .white.opacity(0.6)) -> some View {
