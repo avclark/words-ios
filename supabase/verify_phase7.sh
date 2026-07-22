@@ -15,6 +15,40 @@ step() { printf '\n== %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 py()   { python3 -c "$1"; }
 
+# Every user this run creates is deleted on exit — success OR failure —
+# so a failed run never strands test users (deleting a user cascades away
+# its games via the cleanup trigger).
+CREATED=()
+cleanup() {
+  local status=$?
+  for id in "${CREATED[@]:-}"; do
+    [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
+      -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true
+  done
+  printf '\ncleanup: removed %d test user(s)%s\n' "${#CREATED[@]}" \
+    "$([ $status -ne 0 ] && echo ' (after failure)')"
+}
+trap cleanup EXIT
+
+# Sweep test users stranded by PREVIOUS failed runs (recognizable emails).
+purge_stale_test_users() {
+  curl -s "$URL/auth/v1/admin/users?per_page=1000" \
+    -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+    | py '
+import json, sys, re
+users = json.load(sys.stdin).get("users") or []
+pat = re.compile(r"^(p7[ab]|p8[abc]|verify|smoke-test)-.*@example\.com$")
+for u in users:
+    if pat.match(u.get("email") or ""): print(u["id"])' \
+    | while read -r id; do
+        curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
+          -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+        echo "   purged stale test user $id"
+      done
+}
+step "Purging test users stranded by earlier runs"
+purge_stale_test_users
+
 make_user() {  # $1 = email; echoes "user_id access_token"
   local id token
   id=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
@@ -44,7 +78,9 @@ rpc_expect_error() {  # $1 token, $2 fn, $3 args, $4 expected message fragment
 
 step "0. Create two throwaway users"
 read -r USER_A TOKEN_A <<< "$(make_user "p7a-$TS@example.com")"
+CREATED+=("$USER_A")
 read -r USER_B TOKEN_B <<< "$(make_user "p7b-$TS@example.com")"
+CREATED+=("$USER_B")
 echo "   A=$USER_A"
 echo "   B=$USER_B"
 
@@ -128,13 +164,15 @@ R2=$(rpc "$TOKEN_A" import_local_game "{\"p\":{\"id\":\"$IMPORT_ID\",\"status\":
 echo "   import ✓ ($R1 then $R2)"
 
 step "11. delete_account removes user AND all their games"
+# Scoped to THIS run's games — the table may legitimately hold other
+# users' real games (the original whole-table-empty assertion false-failed
+# the moment the database had production data in it).
 rpc "$TOKEN_A" delete_account '{}' > /dev/null
-LEFT=$(curl -s "$URL/rest/v1/games?select=id" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
-[ "$LEFT" = "[]" ] || fail "games survived account deletion: $LEFT"
-echo "   cascade ✓"
-
-step "12. Cleanup user B"
-curl -sf -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$USER_B" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-echo "   done"
+for id in "$GAME" "$IMPORT_ID"; do
+  LEFT=$(curl -s "$URL/rest/v1/games?id=eq.$id&select=id" \
+    -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+  [ "$LEFT" = "[]" ] || fail "game $id survived account deletion: $LEFT"
+done
+echo "   cascade ✓ (both of A's games gone)"
 
 printf '\nALL PHASE 7 CHECKS PASSED\n'

@@ -13,7 +13,7 @@ enum PlayStatus: Equatable {
 /// opponent's leftovers.
 struct GameOverSummary: Equatable, Codable {
     enum Reason: String, Equatable, Codable {
-        case localEmptied, opponentEmptied, sixPasses
+        case localEmptied, opponentEmptied, sixPasses, resigned
     }
     let reason: Reason
     let localFinal: Int
@@ -68,6 +68,13 @@ final class BoardState {
     /// applyServerDraw when a move syncs.
     private(set) var remoteBagCount: Int?
     var isRemote: Bool { remoteBagCount != nil }
+    /// The server seat the local player occupies (challenge recipients sit
+    /// in seat 1). Everything in this class stays local-perspective
+    /// (players[0] = me); GameSync translates seats on the wire.
+    private(set) var localSeat: Int = 0
+    /// Phase 8: the opponent seat is a remote human — no local engine runs;
+    /// the turn resolves when the server shows their move.
+    private(set) var opponentIsHuman: Bool = false
     /// The one source for "tiles left" — server-authoritative for remote
     /// games, the local bag for legacy/local games (and unit tests).
     var bagRemaining: Int { remoteBagCount ?? bag.count }
@@ -143,19 +150,24 @@ final class BoardState {
     }
 
     /// A fresh server-created game: the server built the bag and dealt both
-    /// racks (create_game); the client holds the AI rack because it runs
-    /// the AI engine.
-    init(remoteID: UUID, myRack: [Tile], aiRack: [Tile], bagCount: Int,
-         localProfile: PlayerProfile, difficulty: AIDifficulty) {
+    /// racks (create_game). For AI games the client holds the AI rack
+    /// because it runs the engine; for a human opponent the rack stays on
+    /// the server and `opponentRack` is empty.
+    init(remoteID: UUID, myRack: [Tile], bagCount: Int,
+         localProfile: PlayerProfile, difficulty: AIDifficulty,
+         opponentProfile: PlayerProfile = .ai,
+         opponentIsHuman: Bool = false,
+         opponentRack: [Tile] = []) {
         self.gameID = remoteID
         self.createdAt = Date()
         self.difficulty = difficulty
+        self.opponentIsHuman = opponentIsHuman
         self.opponentEngine = LocalAIOpponent(difficulty: difficulty)
         _ = Lexicon.words
         remoteBagCount = bagCount
         players = [Player(profile: localProfile, rack: myRack),
-                   Player(profile: .ai, rack: aiRack)]
-        AIPlayer.warmUp()
+                   Player(profile: opponentProfile, rack: opponentRack)]
+        if !opponentIsHuman { AIPlayer.warmUp() }
     }
 
     /// Restore a persisted game exactly where it left off.
@@ -176,7 +188,9 @@ final class BoardState {
         moveLog = saved.moveLog
         gameOver = saved.gameOver
         remoteBagCount = saved.bagCount
-        AIPlayer.warmUp()
+        localSeat = saved.localSeat ?? 0
+        opponentIsHuman = saved.opponentIsHuman ?? false
+        if !opponentIsHuman { AIPlayer.warmUp() }
     }
 
     /// If the app died while the opponent held the turn, the engine's
@@ -197,6 +211,8 @@ final class BoardState {
                   updatedAt: Date(),
                   difficulty: difficulty,
                   bagCount: remoteBagCount,
+                  localSeat: localSeat,
+                  opponentIsHuman: opponentIsHuman,
                   committed: committed,
                   placed: placed,
                   pendingBlank: pendingBlank,
@@ -466,6 +482,13 @@ final class BoardState {
     /// (future remote player).
     private func beginOpponentTurn() {
         guard gameOver == nil else { return }
+        // A remote human's turn has no local engine: the rack lives on the
+        // server (empty here by design) and the turn resolves when a server
+        // refresh shows their move. Everything below is AI-only.
+        if opponentIsHuman {
+            turnState = .opponent
+            return
+        }
         guard !opponent.rack.isEmpty else {
             opponentPassed("\(opponent.profile.displayName) has no tiles — passed")
             return
@@ -545,7 +568,7 @@ final class BoardState {
         switch reason {
         case .localEmptied: players[localIndex].score += oppLeft
         case .opponentEmptied: players[opponentIndex].score += localLeft
-        case .sixPasses: break
+        case .sixPasses, .resigned: break
         }
         let summary = GameOverSummary(reason: reason,
                                       localFinal: players[localIndex].score,
@@ -559,11 +582,41 @@ final class BoardState {
     }
 
     /// Server response to a synced move: the authoritative refill for one
-    /// seat plus the remaining bag count.
+    /// seat (local-perspective index) plus the remaining bag count.
     func applyServerDraw(seat: Int, letters: [Tile], bagCount: Int) {
         guard isRemote, players.indices.contains(seat) else { return }
         remoteBagCount = bagCount
         players[seat].rack.append(contentsOf: letters)
+        onAutosave?(self)
+    }
+
+    /// Fold freshly pulled server state into the live game — how a remote
+    /// human opponent's move lands. Only ADDS committed tiles and advances
+    /// the turn; views stay alive throughout (invariant 2: nothing is torn
+    /// down, exactly like an AI move landing via handleOpponentAction).
+    func applyServerRefresh(from saved: SavedGame) {
+        guard isRemote, gameOver == nil else { return }
+        guard saved.turnNumber > turnNumber || saved.gameOver != nil else { return }
+
+        for (coord, tile) in saved.committed where committed[coord] == nil {
+            // The local player may have tentatively placed tiles while
+            // waiting; bounce any that sit on cells the move needs.
+            if placed[coord] != nil { returnToRack(from: coord) }
+            committed[coord] = tile
+        }
+        let scoreDelta = saved.players[1].score - players[opponentIndex].score
+        players[localIndex].score = saved.players[0].score
+        players[opponentIndex].score = saved.players[1].score
+        turnNumber = saved.turnNumber
+        consecutivePasses = saved.consecutivePasses
+        remoteBagCount = saved.bagCount ?? remoteBagCount
+        turnState = saved.turnState
+        if scoreDelta > 0 {
+            log("\(opponent.profile.displayName) played +\(scoreDelta)")
+        } else if saved.turnState == .local {
+            log("\(opponent.profile.displayName) passed or swapped")
+        }
+        gameOver = saved.gameOver
         onAutosave?(self)
     }
 

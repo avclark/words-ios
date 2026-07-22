@@ -23,10 +23,10 @@ struct RemoteModeTests {
     @Test func remotePlayEmitsIntentAndWaitsForServerDraw() {
         let state = BoardState(remoteID: UUID(),
                                myRack: tiles("CATXJQV"),
-                               aiRack: tiles("EEEEEEE"),
                                bagCount: 86,
                                localProfile: PlayerProfile(id: UUID(), displayName: "T", avatar: .bolt),
-                               difficulty: .hard)
+                               difficulty: .hard,
+                               opponentRack: tiles("EEEEEEE"))
         var reported: BoardState.RemoteMove?
         state.onRemoteMove = { _, move in
             if reported == nil { reported = move }  // AI answers async; first event is ours
@@ -61,10 +61,10 @@ struct RemoteModeTests {
     @Test func remoteSwapEmitsIntent() {
         let state = BoardState(remoteID: UUID(),
                                myRack: tiles("ABCDEFG"),
-                               aiRack: tiles("EEEEEEE"),
                                bagCount: 86,
                                localProfile: PlayerProfile(id: UUID(), displayName: "T", avatar: .bolt),
-                               difficulty: .hard)
+                               difficulty: .hard,
+                               opponentRack: tiles("EEEEEEE"))
         var reported: BoardState.RemoteMove?
         state.onRemoteMove = { _, move in
             if reported == nil { reported = move }
@@ -99,10 +99,10 @@ struct RemoteModeTests {
     @Test func remoteSaveRoundTripsBagCount() throws {
         let state = BoardState(remoteID: UUID(),
                                myRack: tiles("ABCDEFG"),
-                               aiRack: tiles("EEEEEEE"),
                                bagCount: 42,
                                localProfile: PlayerProfile(id: UUID(), displayName: "T", avatar: .bolt),
-                               difficulty: .easy)
+                               difficulty: .easy,
+                               opponentRack: tiles("EEEEEEE"))
         let data = try JSONEncoder().encode(state.snapshot())
         let decoded = try JSONDecoder().decode(SavedGame.self, from: data)
         #expect(decoded.bagCount == 42)

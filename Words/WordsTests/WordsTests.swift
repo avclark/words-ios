@@ -91,10 +91,12 @@ struct AIPlayerTests {
         }
     }
 
-    /// Board spells QUI; the rack is junk (VVWWKK) plus one blank. The only
-    /// high play is QUICK: the blank MUST become C (17 pts with the real K) —
-    /// a generator that hardcodes blanks as "A" (the old Replit bug) can't
-    /// find it and would bottom out around WIZ/HO-level scraps.
+    /// Board spells QUI; the rack is junk (VVWWKK) plus one blank. The high
+    /// plays are QUICK and QUIRK — both 17 (Q10+U1+I1+blank 0+K5), both
+    /// needing the blank as their fourth letter — a generator that
+    /// hardcodes blanks as "A" (the old Replit bug) can find neither and
+    /// would bottom out around WIZ/HO-level scraps. The alphabetical
+    /// tie-break in AIPlayer.move makes QUICK the deterministic pick.
     @Test func blankCompletesHighValueWord() {
         let b = board(word: "QUI", row: 7, startCol: 5)
         let move = AIPlayer.bestMove(board: b, rack: tiles("?VVWWKK"))
@@ -102,7 +104,7 @@ struct AIPlayerTests {
         guard let move else { return }
         assertLegal(move, board: b)
         #expect(move.word == "QUICK")
-        #expect(move.score == 17) // Q10 + U1 + I1 + blank-C 0 + K5, no premiums
+        #expect(move.score == 17)
         let blank = move.placement[BoardCoord(row: 7, col: 8)]
         #expect(blank?.isBlank == true, "The C in QUICK can only come from the blank")
         #expect(blank?.assignedLetter == "C")

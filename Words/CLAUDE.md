@@ -181,8 +181,53 @@ and the pass chip now always visible (dimmed at 0/6).
   verify_phase7.sh exercises the whole RPC surface with curl.
   4 remote-mode unit tests added (14 total).
 
-**Next:** run phase7_games.sql + verify_phase7.sh, device-test Phase 7.
-Then Phase 8 — friends & invites (see FEATURE-LIST.md).
+- Phase 8: friends & invites. supabase/phase8_friends.sql (paste AFTER
+  phase7_games.sql): optional unique usernames on profiles
+  (set_username RPC: ok/taken/invalid), invites table (one live token per
+  creator, 30-day expiry, redeem = instant accepted friendship;
+  own_link/already_friends/invalid handled), friend-request RPCs
+  (send/respond/remove/list_friends; mutual request auto-accepts),
+  create_game(text, uuid) replaces the old signature — optional human
+  opponent (must be accepted friend; ai_rack null for human games).
+  HUMAN RACK PRIVACY: the AI-seat rack exception does NOT extend to human
+  seats (fetch_game reveals own seat + AI seats only) — verify_phase8.sh
+  proves it. Client: invite links via custom scheme words://invite/<token>
+  (Words-Info.plist merged via INFOPLIST_FILE; universal links deferred to
+  ship time — need a domain + AASA). BoardState: localSeat (challenge
+  recipient = server seat 1; class stays local-perspective, GameSync
+  translates on the wire), opponentIsHuman (beginOpponentTurn waits
+  instead of running an engine — no auto-pass on the empty local mirror
+  of a human rack), applyServerRefresh(from:) folds pulled server state
+  into the LIVE board (no view teardown — invariant 2). RootView polls
+  fetch_game every 10s while waiting on a human. FriendsView/FriendsStore
+  (invite ShareLink, username search, requests, challenge), new-game
+  sheet lists Robo + friends. All verify scripts now trap EXIT and clean
+  up their users on failure; verify_phase7.sh also purges stale test
+  users from earlier runs. AIPlayer.move got an alphabetical tie-break —
+  candidate emission order is hash-order-dependent and QUICK/QUIRK tie at
+  17 made blankCompletesHighValueWord flaky (test comment documents it).
+  18 unit tests.
+
+- Phase 8b: account deletion in human games
+  (supabase/phase8b_account_deletion.sql — paste AFTER phase8_friends.sql).
+  The "step 11 regression" was a false positive: verify_phase7's old
+  assertion checked the WHOLE games table was empty, which broke the
+  moment Adam had real production games — now scoped to the run's own
+  game ids. The real gap it surfaced: deleting an account cascaded the
+  seat row away, zombifying the human opponent's game. Fix: BEFORE DELETE
+  trigger on profiles — active human-vs-human games flip to resigned with
+  the remaining seat as winner (visible forfeit, no dark patterns);
+  departing seat is anonymized (engine 'departed', user_id null, named
+  constraints re-added to allow it); last-real-human deletion still
+  removes the game entirely (orphan cleanup treats departed as
+  non-human). Client maps departed → "Departed player". verify_phase8
+  step 8 proves forfeit + anonymize + final cleanup.
+  NOTE: SUPABASE_SECRET_KEY lives in ~/.zshrc — `source ~/.zshrc` before
+  running verify scripts (non-interactive shells don't load it).
+
+**Next:** paste phase8b_account_deletion.sql, re-run verify_phase8.sh
+(step 8 must go green), device-test Phase 8 (second account on the
+simulator for human-vs-human). Then Phase 9 — async multiplayer end to end.
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

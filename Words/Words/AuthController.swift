@@ -72,6 +72,8 @@ final class AuthController {
     // MARK: - Sign in with Apple
 
     func configureAppleRequest(_ request: ASAuthorizationAppleIDRequest) {
+        // A new attempt starts: whatever the last one said is stale now.
+        lastError = nil
         let nonce = Self.randomNonce()
         currentNonce = nonce
         request.requestedScopes = [.fullName, .email]

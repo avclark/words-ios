@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Custom URL scheme for invite links (words://invite/<token>).
+	     Merged with the generated Info.plist at build time. Chosen over
+	     universal links for now: zero Apple/domain configuration. At ship
+	     time (Phase 15), universal links (https) can replace this — they
+	     need a domain hosting an apple-app-site-association file and the
+	     associated-domains entitlement, and they degrade gracefully when
+	     the app isn't installed, which a custom scheme can't. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kittyrobotics.Words.invite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>words</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -14,6 +14,11 @@ struct SavedGame: Identifiable, Codable {
     /// the server and `bag` below stays empty. Nil = pre-Phase-7 local game
     /// (not yet migrated) whose bag is still in `bag`.
     var bagCount: Int?
+    /// Phase 8: the server seat the local player occupies (nil = 0, the
+    /// pre-Phase-8 default). players[] stays local-perspective regardless.
+    var localSeat: Int?
+    /// Phase 8: opponent seat is a remote human (nil = false → AI).
+    var opponentIsHuman: Bool?
 
     var committed: [BoardCoord: Tile]
     /// Tiles tentatively placed this turn — preserved so quitting mid-move

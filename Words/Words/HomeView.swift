@@ -7,11 +7,14 @@ struct HomeView: View {
     @Binding var profile: PlayerProfile
     let store: GameStore
     let auth: AuthController
+    let friends: FriendsStore
     let onOpen: (SavedGame) -> Void
     let onNewGame: (AIDifficulty) -> Void
+    let onChallenge: (RemoteGames.FriendDTO) -> Void
 
     @State private var showProfileEditor = false
     @State private var showNewGameSetup = false
+    @State private var showFriends = false
 
     static let background = Color(red: 0.05, green: 0.07, blue: 0.13)
 
@@ -45,19 +48,43 @@ struct HomeView: View {
             ProfileEditorSheet(profile: $profile, auth: auth)
         }
         .sheet(isPresented: $showNewGameSetup) {
-            NewGameSetupSheet { difficulty in
+            NewGameSetupSheet(friends: friends) { choice in
                 showNewGameSetup = false
-                onNewGame(difficulty)
+                switch choice {
+                case .robo(let difficulty): onNewGame(difficulty)
+                case .friend(let friend): onChallenge(friend)
+                }
+            }
+        }
+        .sheet(isPresented: $showFriends) {
+            FriendsView(store: friends) { friend in
+                onChallenge(friend)
             }
         }
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 14) {
             Text("WORDS")
                 .font(.system(size: 28, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
             Spacer()
+            Button {
+                showFriends = true
+            } label: {
+                ZStack {
+                    Circle().fill(Color.white.opacity(0.08))
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.7))
+                    if !friends.incoming.isEmpty {
+                        Circle().fill(Color.yellow)
+                            .frame(width: 10, height: 10)
+                            .offset(x: 13, y: -13)
+                    }
+                }
+                .frame(width: 38, height: 38)
+            }
             Button {
                 showProfileEditor = true
             } label: {
@@ -269,58 +296,92 @@ private struct ProfileEditorSheet: View {
 
 // MARK: - New game setup
 
-/// Opponent choice + difficulty. Today the only opponent is the AI; the
-/// list structure is the seam where "invite a friend" slots in later
-/// without redesigning this screen.
+/// Opponent choice + difficulty. The opponent list is the Phase 4/7
+/// generic player model surfacing in UI: Robo and each friend are just
+/// selectable opponents; a friend seat becomes a human seat server-side.
 private struct NewGameSetupSheet: View {
-    let onStart: (AIDifficulty) -> Void
+    enum Choice {
+        case robo(AIDifficulty)
+        case friend(RemoteGames.FriendDTO)
+    }
+
+    let friends: FriendsStore
+    let onStart: (Choice) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var difficulty: AIDifficulty = .medium
+    @State private var selectedFriend: RemoteGames.FriendDTO?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("New game")
                 .font(.system(size: 18, weight: .bold, design: .rounded))
                 .frame(maxWidth: .infinity)
 
             sectionLabel("OPPONENT")
 
-            opponentRow(avatar: .robot, name: PlayerProfile.ai.displayName,
-                        detail: "AI opponent", selected: true)
-            opponentRow(avatar: .star, name: "Invite a friend",
-                        detail: "Coming with multiplayer", selected: false)
-                .opacity(0.35)
-
-            sectionLabel("DIFFICULTY")
-
-            Picker("Difficulty", selection: $difficulty) {
-                ForEach(AIDifficulty.allCases) { level in
-                    Text(level.label).tag(level)
+            ScrollView {
+                VStack(spacing: 8) {
+                    Button {
+                        selectedFriend = nil
+                    } label: {
+                        opponentRow(avatar: .robot, name: PlayerProfile.ai.displayName,
+                                    detail: "AI opponent", selected: selectedFriend == nil)
+                    }
+                    ForEach(friends.friends) { friend in
+                        Button {
+                            selectedFriend = friend
+                        } label: {
+                            opponentRow(avatar: Avatar(rawValue: friend.avatar ?? "") ?? .star,
+                                        name: friend.displayName,
+                                        detail: friend.username.map { "@\($0)" } ?? "Friend",
+                                        selected: selectedFriend == friend)
+                        }
+                    }
+                    if friends.friends.isEmpty {
+                        Text("Add friends to challenge them — tap the friends icon on the home screen.")
+                            .font(.system(size: 12, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .padding(.top, 2)
+                    }
                 }
             }
-            .pickerStyle(.segmented)
+            .frame(maxHeight: 190)
 
-            Text(difficulty.blurb)
-                .font(.system(size: 12, design: .rounded))
-                .foregroundStyle(.white.opacity(0.45))
-                .frame(maxWidth: .infinity)
+            if selectedFriend == nil {
+                sectionLabel("DIFFICULTY")
+
+                Picker("Difficulty", selection: $difficulty) {
+                    ForEach(AIDifficulty.allCases) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(difficulty.blurb)
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .frame(maxWidth: .infinity)
+            }
 
             Button {
                 dismiss()
-                onStart(difficulty)
+                onStart(selectedFriend.map { .friend($0) } ?? .robo(difficulty))
             } label: {
-                Text("START GAME")
+                Text(selectedFriend.map { "CHALLENGE \($0.displayName.uppercased())" } ?? "START GAME")
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background(Capsule().fill(Color.yellow))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .padding(.top, 4)
+            .padding(.top, 2)
         }
         .padding(24)
-        .presentationDetents([.medium])
+        .presentationDetents([.large])
         .presentationBackground(HomeView.background)
+        .task { await friends.refresh() }
     }
 
     private func sectionLabel(_ text: String) -> some View {

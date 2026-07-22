@@ -41,47 +41,78 @@ final class GameSync {
             self?.enqueueMove(move, from: state)
         }
         board.onGameFinished = { [weak self] state, summary in
-            self?.enqueueFinish(gameID: state.gameID, summary: summary)
+            self?.enqueueFinish(state: state, summary: summary)
         }
     }
 
     // MARK: - Game creation
 
     /// New games are born on the server (it owns the bag and the racks);
-    /// requires connectivity by design.
-    func createGame(difficulty: AIDifficulty, profile: PlayerProfile) async throws -> BoardState {
-        let created = try await RemoteGames.create(difficulty: difficulty)
+    /// requires connectivity by design. Pass an opponent to challenge a
+    /// friend instead of the AI — same seats, no rack comes back.
+    func createGame(difficulty: AIDifficulty, profile: PlayerProfile,
+                    opponent: RemoteGames.FriendDTO? = nil) async throws -> BoardState {
+        let created = try await RemoteGames.create(difficulty: difficulty,
+                                                   opponent: opponent?.userID)
+        let opponentProfile: PlayerProfile
+        if let opponent {
+            opponentProfile = PlayerProfile(
+                id: opponent.userID,
+                displayName: opponent.displayName,
+                avatar: Avatar(rawValue: opponent.avatar ?? "") ?? .star)
+        } else {
+            opponentProfile = .ai
+        }
         return BoardState(remoteID: created.gameID,
                           myRack: RemoteGames.tiles(fromRack: created.myRack),
-                          aiRack: RemoteGames.tiles(fromRack: created.aiRack),
                           bagCount: created.bagCount,
                           localProfile: profile,
-                          difficulty: difficulty)
+                          difficulty: difficulty,
+                          opponentProfile: opponentProfile,
+                          opponentIsHuman: opponent != nil,
+                          opponentRack: RemoteGames.tiles(fromRack: created.aiRack ?? []))
+    }
+
+    /// Poll the server for an open human-vs-human game — how the
+    /// opponent's move reaches a live board. Applies in place (no view
+    /// teardown) and persists.
+    func refreshActiveGame(_ board: BoardState) async {
+        guard board.isRemote, board.opponentIsHuman else { return }
+        guard let dto = try? await RemoteGames.fetchGame(id: board.gameID),
+              let fresh = Self.savedGame(from: dto, localUserID: userID) else { return }
+        board.applyServerRefresh(from: fresh)
     }
 
     // MARK: - Move pipeline
 
     private func enqueueMove(_ move: BoardState.RemoteMove, from board: BoardState) {
         let gameID = board.gameID
-        let params = Self.submitParams(gameID: gameID, move: move)
+        let params = Self.submitParams(gameID: gameID, localSeat: board.localSeat, move: move)
         enqueue(gameID: gameID) { [weak self, weak board] in
             await self?.submit(params: params, seat: move.seat, gameID: gameID, board: board)
         }
     }
 
-    private func enqueueFinish(gameID: UUID, summary: GameOverSummary) {
+    private func enqueueFinish(state board: BoardState, summary: GameOverSummary) {
+        let gameID = board.gameID
+        let localSeat = board.localSeat
         let reason: String
         switch summary.reason {
         case .localEmptied, .opponentEmptied: reason = "emptied"
         case .sixPasses: reason = "six_passes"
+        case .resigned: reason = "resigned"
         }
-        let winner: Int? = summary.localFinal == summary.opponentFinal ? nil
+        // Local perspective → server seats.
+        let winnerLocal: Int? = summary.localFinal == summary.opponentFinal ? nil
             : (summary.localFinal > summary.opponentFinal ? 0 : 1)
+        let winnerServer = winnerLocal.map { $0 == 0 ? localSeat : 1 - localSeat }
+        let scoreForServerSeat0 = localSeat == 0 ? summary.localFinal : summary.opponentFinal
+        let scoreForServerSeat1 = localSeat == 0 ? summary.opponentFinal : summary.localFinal
         enqueue(gameID: gameID) {
             try? await RemoteGames.finish(gameID: gameID, reason: reason,
-                                          localFinal: summary.localFinal,
-                                          opponentFinal: summary.opponentFinal,
-                                          winnerSeat: winner)
+                                          localFinal: scoreForServerSeat0,
+                                          opponentFinal: scoreForServerSeat1,
+                                          winnerSeat: winnerServer)
         }
     }
 
@@ -206,50 +237,69 @@ final class GameSync {
 
     // MARK: - DTO ↔ SavedGame
 
-    static func submitParams(gameID: UUID, move: BoardState.RemoteMove) -> RemoteGames.SubmitParams {
+    /// BoardState speaks local-perspective seats (0 = me); the server wants
+    /// real seats. Challenge recipients sit in server seat 1, so the two
+    /// numberings differ exactly when localSeat == 1.
+    static func submitParams(gameID: UUID, localSeat: Int,
+                             move: BoardState.RemoteMove) -> RemoteGames.SubmitParams {
+        let serverSeat = move.seat == 0 ? localSeat : 1 - localSeat
         switch move.kind {
         case .play(let placements, let word, let score):
-            return .init(p_game_id: gameID, p_seat: move.seat, p_kind: "play",
+            return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "play",
                          p_placements: RemoteGames.placements(from: placements),
                          p_word: word, p_client_score: score, p_swap_letters: nil)
         case .pass:
-            return .init(p_game_id: gameID, p_seat: move.seat, p_kind: "pass",
+            return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "pass",
                          p_placements: nil, p_word: nil, p_client_score: nil,
                          p_swap_letters: nil)
         case .swap(let tiles):
-            return .init(p_game_id: gameID, p_seat: move.seat, p_kind: "swap",
+            return .init(p_game_id: gameID, p_seat: serverSeat, p_kind: "swap",
                          p_placements: nil, p_word: nil, p_client_score: nil,
                          p_swap_letters: tiles.map { String($0.letter) })
         }
     }
 
-    /// Rebuild a cacheable SavedGame from server state. Used for rollback
-    /// and cross-device refresh; mid-turn tentative placements are local
-    /// UI state and aren't part of it.
+    /// Rebuild a cacheable SavedGame from server state. Used for rollback,
+    /// cross-device refresh, and live human-game refresh. The cache is
+    /// local-perspective: players[0] is always the local user, whatever
+    /// server seat they occupy; mid-turn tentative placements are local UI
+    /// state and aren't part of it.
     static func savedGame(from dto: RemoteGames.GameDTO, localUserID: UUID) -> SavedGame? {
-        guard dto.players.count == 2 else { return nil }
-        let p0 = dto.players[0], p1 = dto.players[1]
+        guard dto.players.count == 2,
+              let mine = dto.players.first(where: { $0.userID == localUserID }),
+              let theirs = dto.players.first(where: { $0.seat != mine.seat })
+        else { return nil }
+        let localSeat = mine.seat
+        // 'departed' = a human who deleted their account (phase8b): the
+        // game ends by forfeit server-side; the seat stays, anonymized.
+        let opponentIsHuman = theirs.engine != "local_ai"
 
         let localProfile = PlayerProfile(
-            id: p0.userID ?? localUserID,
-            displayName: p0.displayName ?? "Player",
-            avatar: Avatar(rawValue: p0.avatar ?? "") ?? .bolt)
-        let aiProfile = PlayerProfile(
-            id: PlayerProfile.ai.id,
-            displayName: p1.displayName ?? PlayerProfile.ai.displayName,
-            avatar: Avatar(rawValue: p1.avatar ?? "") ?? .robot)
+            id: localUserID,
+            displayName: mine.displayName ?? "Player",
+            avatar: Avatar(rawValue: mine.avatar ?? "") ?? .bolt)
+        let opponentFallbackName = theirs.engine == "departed"
+            ? "Departed player" : PlayerProfile.ai.displayName
+        let opponentProfile = PlayerProfile(
+            id: theirs.userID ?? PlayerProfile.ai.id,
+            displayName: theirs.displayName ?? opponentFallbackName,
+            avatar: Avatar(rawValue: theirs.avatar ?? "") ?? (opponentIsHuman ? .star : .robot))
 
-        var players = [Player(profile: localProfile, score: p0.score,
-                              rack: RemoteGames.tiles(fromRack: p0.rack ?? [])),
-                       Player(profile: aiProfile, score: p1.score,
-                              rack: RemoteGames.tiles(fromRack: p1.rack ?? []))]
+        // A human opponent's rack is never in the DTO (server refuses);
+        // an AI seat's rack is (the client runs the engine).
+        let players = [Player(profile: localProfile, score: mine.score,
+                              rack: RemoteGames.tiles(fromRack: mine.rack ?? [])),
+                       Player(profile: opponentProfile, score: theirs.score,
+                              rack: RemoteGames.tiles(fromRack: theirs.rack ?? []))]
 
         var gameOver: GameOverSummary?
         if dto.status != "active" {
             let reason: GameOverSummary.Reason
-            switch dto.endReason {
-            case "six_passes": reason = .sixPasses
-            default: reason = dto.winnerSeat == 1 ? .opponentEmptied : .localEmptied
+            switch (dto.endReason, dto.winnerSeat) {
+            case ("six_passes", _): reason = .sixPasses
+            case ("resigned", _): reason = .resigned
+            case (_, .some(let w)): reason = w == localSeat ? .localEmptied : .opponentEmptied
+            default: reason = .sixPasses
             }
             // Leftover detail isn't stored server-side; finals are.
             gameOver = GameOverSummary(reason: reason,
@@ -260,7 +310,8 @@ final class GameSync {
 
         var log = dto.importLog ?? []
         for move in dto.moves ?? [] {
-            let name = move.seat == 0 ? localProfile.displayName : aiProfile.displayName
+            let name = move.seat == localSeat ? localProfile.displayName
+                                              : opponentProfile.displayName
             switch move.kind {
             case "play":
                 log.append("\(name) played \(move.word ?? "a word") +\(move.clientScore ?? 0)")
@@ -271,19 +322,21 @@ final class GameSync {
             }
         }
 
-        let difficulty = AIDifficulty(rawValue: p1.aiDifficulty ?? "") ?? .hard
+        let difficulty = AIDifficulty(rawValue: theirs.aiDifficulty ?? "") ?? .hard
         return SavedGame(
             id: dto.gameID,
             createdAt: Date(),
             updatedAt: dto.updatedDate ?? Date(),
             difficulty: difficulty,
             bagCount: dto.bagCount ?? 0,
+            localSeat: localSeat,
+            opponentIsHuman: opponentIsHuman,
             committed: RemoteGames.committed(fromBoard: dto.board ?? [:]),
             placed: [:],
             pendingBlank: nil,
             bag: [],
             players: players,
-            turnState: dto.turnSeat == 0 ? .local : .opponent,
+            turnState: dto.turnSeat == localSeat ? .local : .opponent,
             turnNumber: dto.turnNumber ?? 1,
             consecutivePasses: dto.consecutivePasses ?? 0,
             moveLog: log,

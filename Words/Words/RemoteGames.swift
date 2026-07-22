@@ -96,7 +96,8 @@ enum RemoteGames {
     struct CreateResult: Decodable {
         let gameID: UUID
         let myRack: [String]
-        let aiRack: [String]
+        /// Present only for AI games — human racks never leave the server.
+        let aiRack: [String]?
         let bagCount: Int
 
         enum CodingKeys: String, CodingKey {
@@ -129,13 +130,129 @@ enum RemoteGames {
         let p_swap_letters: [String]?
     }
 
+    struct FriendDTO: Decodable, Identifiable, Equatable {
+        let userID: UUID
+        let displayName: String
+        let avatar: String?
+        let username: String?
+        /// 'friend' | 'incoming' | 'outgoing'
+        let state: String
+
+        var id: UUID { userID }
+
+        enum CodingKeys: String, CodingKey {
+            case avatar, username, state
+            case userID = "user_id"
+            case displayName = "display_name"
+        }
+    }
+
+    struct InviteRedemption: Decodable {
+        /// The redeem_invite response's friend object carries identity only
+        /// (no `state` field) — decoding it as FriendDTO fails on EVERY
+        /// response, which once mislabeled all redemptions as network
+        /// errors. Keep this shape matched to the RPC.
+        struct Friend: Decodable {
+            let userID: UUID
+            let displayName: String
+
+            enum CodingKeys: String, CodingKey {
+                case userID = "user_id"
+                case displayName = "display_name"
+            }
+        }
+        let status: String   // accepted | already_friends | own_link | invalid
+        let friend: Friend?
+    }
+
     // MARK: - Calls
 
-    static func create(difficulty: AIDifficulty) async throws -> CreateResult {
-        struct P: Encodable { let p_ai_difficulty: String }
+    /// nil opponent → AI game at `difficulty`; non-nil → human-vs-human
+    /// with a friend (server enforces the friendship). `aiRack` comes back
+    /// only for AI games — a human opponent's rack never leaves the server.
+    static func create(difficulty: AIDifficulty, opponent: UUID? = nil) async throws -> CreateResult {
+        struct P: Encodable {
+            let p_ai_difficulty: String
+            let p_opponent: UUID?
+        }
         return try await SupabaseService.client
-            .rpc("create_game", params: P(p_ai_difficulty: difficulty.rawValue))
+            .rpc("create_game", params: P(p_ai_difficulty: difficulty.rawValue,
+                                          p_opponent: opponent))
             .execute().value
+    }
+
+    // MARK: - Friends & invites
+
+    static func createInvite() async throws -> String {
+        struct R: Decodable { let token: String }
+        let result: R = try await SupabaseService.client
+            .rpc("create_invite").execute().value
+        return result.token
+    }
+
+    static func redeemInvite(token: String) async throws -> InviteRedemption {
+        struct P: Encodable { let p_token: String }
+        return try await SupabaseService.client
+            .rpc("redeem_invite", params: P(p_token: token))
+            .execute().value
+    }
+
+    static func listFriends() async throws -> [FriendDTO] {
+        try await SupabaseService.client
+            .rpc("list_friends").execute().value
+    }
+
+    static func sendFriendRequest(to userID: UUID) async throws -> String {
+        struct P: Encodable { let p_user: UUID }
+        return try await SupabaseService.client
+            .rpc("send_friend_request", params: P(p_user: userID))
+            .execute().value
+    }
+
+    static func respondFriendRequest(from userID: UUID, accept: Bool) async throws {
+        struct P: Encodable { let p_user: UUID; let p_accept: Bool }
+        _ = try await SupabaseService.client
+            .rpc("respond_friend_request", params: P(p_user: userID, p_accept: accept))
+            .execute()
+    }
+
+    static func removeFriend(_ userID: UUID) async throws {
+        struct P: Encodable { let p_user: UUID }
+        _ = try await SupabaseService.client
+            .rpc("remove_friend", params: P(p_user: userID))
+            .execute()
+    }
+
+    static func setUsername(_ username: String?) async throws -> String {
+        struct P: Encodable { let p_username: String? }
+        return try await SupabaseService.client
+            .rpc("set_username", params: P(p_username: username))
+            .execute().value
+    }
+
+    /// Username prefix search (profiles are readable by any signed-in user;
+    /// there is deliberately no email or phone search).
+    static func searchProfiles(usernamePrefix: String, excluding selfID: UUID) async throws -> [FriendDTO] {
+        struct Row: Decodable {
+            let id: UUID
+            let display_name: String
+            let avatar: String?
+            let username: String?
+        }
+        let sanitized = usernamePrefix.lowercased()
+            .filter { $0.isLetter || $0.isNumber || $0 == "_" }
+        guard !sanitized.isEmpty else { return [] }
+        let rows: [Row] = try await SupabaseService.client
+            .from("profiles")
+            .select("id, display_name, avatar, username")
+            .ilike("username", pattern: "\(sanitized)%")
+            .neq("id", value: selfID)
+            .limit(10)
+            .execute().value
+        return rows.map {
+            FriendDTO(userID: $0.id, displayName: $0.display_name,
+                      avatar: $0.avatar, username: $0.username, state: "none")
+        }
     }
 
     static func submit(_ params: SubmitParams) async throws -> MoveResult {
@@ -229,6 +346,7 @@ enum RemoteGames {
         switch over.reason {
         case .localEmptied, .opponentEmptied: reason = "emptied"
         case .sixPasses: reason = "six_passes"
+        case .resigned: reason = "resigned"
         }
         let winner: Int? = over.localFinal == over.opponentFinal ? nil
             : (over.localFinal > over.opponentFinal ? 0 : 1)

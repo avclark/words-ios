@@ -19,11 +19,15 @@ struct RootView: View {
     @State private var auth = AuthController()
     @State private var store: GameStore?
     @State private var sync: GameSync?
+    @State private var friends: FriendsStore?
     @State private var profile = LocalProfile.load()
     @State private var activeGame: BoardState?
     @State private var profilePushTask: Task<Void, Never>?
     @State private var startError: String?
+    @State private var inviteMessage: String?
     @Environment(\.scenePhase) private var scenePhase
+
+    private static let pendingInviteKey = "pendingInviteToken"
 
     var body: some View {
         Group {
@@ -75,6 +79,76 @@ struct RootView: View {
         } message: {
             Text(startError ?? "")
         }
+        .alert("Invite",
+               isPresented: .init(get: { inviteMessage != nil },
+                                  set: { if !$0 { inviteMessage = nil } })) {
+            Button("OK") { inviteMessage = nil }
+        } message: {
+            Text(inviteMessage ?? "")
+        }
+        .onOpenURL { url in
+            handleInviteURL(url)
+        }
+        // A live human-vs-human game has no local engine: poll while it's
+        // the opponent's turn so their move lands without leaving the board.
+        .task(id: activeGame?.gameID) {
+            guard let game = activeGame, game.opponentIsHuman else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled else { return }
+                if game.waitingForOpponent {
+                    await sync?.refreshActiveGame(game)
+                }
+            }
+        }
+    }
+
+    // MARK: - Invite links (words://invite/<token>)
+
+    private func handleInviteURL(_ url: URL) {
+        guard url.scheme == "words", url.host == "invite" else { return }
+        let token = url.lastPathComponent
+        guard !token.isEmpty, token != "/" else { return }
+        if auth.signedInUserID != nil {
+            redeemInvite(token)
+        } else {
+            // Sign in first; sessionDidChange redeems once a session lands.
+            UserDefaults.standard.set(token, forKey: Self.pendingInviteKey)
+            inviteMessage = "Sign in to accept the invite."
+        }
+    }
+
+    private func redeemInvite(_ token: String) {
+        UserDefaults.standard.removeObject(forKey: Self.pendingInviteKey)
+        Task {
+            do {
+                let result = try await RemoteGames.redeemInvite(token: token)
+                // Every decoded status is terminal — the token stays
+                // cleared; only a transport failure below may re-stash it.
+                let name = result.friend?.displayName ?? "them"
+                switch result.status {
+                case "accepted":
+                    inviteMessage = "You're now friends with \(name)!"
+                case "already_friends":
+                    inviteMessage = "You're already friends with \(name)."
+                case "own_link":
+                    inviteMessage = "That's your own invite link — send it to someone else!"
+                default:
+                    inviteMessage = "That invite link is invalid or has expired. Ask your friend for a fresh one."
+                }
+                await friends?.refresh()
+            } catch where (error as NSError).domain == NSURLErrorDomain {
+                // Genuinely couldn't reach the server: keep the token and
+                // retry on the next launch/sign-in.
+                UserDefaults.standard.set(token, forKey: Self.pendingInviteKey)
+                inviteMessage = "Couldn't reach the server to accept the invite — it'll retry next time you open the app."
+            } catch {
+                // Server answered but something else broke (rejection,
+                // malformed response). Retrying the same token forever
+                // can't help — surface it and stop.
+                inviteMessage = "Something went wrong accepting the invite. Ask your friend to send a fresh link."
+            }
+        }
     }
 
     private var loadingScreen: some View {
@@ -85,7 +159,7 @@ struct RootView: View {
 
     @ViewBuilder
     private var gameContent: some View {
-        if let store {
+        if let store, let friends {
             if let activeGame {
                 GameView(state: activeGame,
                          onExit: { closeActiveGame() },
@@ -97,8 +171,10 @@ struct RootView: View {
                 HomeView(profile: $profile,
                          store: store,
                          auth: auth,
+                         friends: friends,
                          onOpen: { open($0) },
-                         onNewGame: { start(difficulty: $0) })
+                         onNewGame: { start(difficulty: $0) },
+                         onChallenge: { challenge($0) })
                     .onChange(of: profile) { _, newValue in
                         LocalProfile.save(newValue)
                         schedulePushProfile(newValue)
@@ -114,12 +190,14 @@ struct RootView: View {
         guard let userID else {
             store = nil
             sync = nil
+            friends = nil
             return
         }
         let newStore = GameStore(userID: userID)
         let newSync = GameSync(store: newStore, userID: userID)
         store = newStore
         sync = newSync
+        friends = FriendsStore(selfID: userID)
         Task {
             if let merged = await auth.resolveProfile(local: profile) {
                 profile = merged
@@ -127,6 +205,10 @@ struct RootView: View {
             }
             await newSync.migrateLocalGames()
             await newSync.refreshLobby()
+            await friends?.refresh()
+            if let pending = UserDefaults.standard.string(forKey: Self.pendingInviteKey) {
+                redeemInvite(pending)
+            }
         }
     }
 
@@ -146,11 +228,20 @@ struct RootView: View {
     // MARK: - Games
 
     private func start(difficulty: AIDifficulty) {
+        createGame(difficulty: difficulty, opponent: nil)
+    }
+
+    private func challenge(_ friend: RemoteGames.FriendDTO) {
+        createGame(difficulty: .hard, opponent: friend)
+    }
+
+    private func createGame(difficulty: AIDifficulty, opponent: RemoteGames.FriendDTO?) {
         guard let sync, let store else { return }
         Task {
             do {
                 let game = try await sync.createGame(difficulty: difficulty,
-                                                     profile: startableProfile)
+                                                     profile: startableProfile,
+                                                     opponent: opponent)
                 wire(game)
                 store.save(game.snapshot())
                 activeGame = game

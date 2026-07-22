@@ -19,6 +19,15 @@ PASS="verify-pass-$(date +%s)"
 step() { printf '\n== %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
+# The throwaway user is deleted on exit — success OR failure — so a failed
+# run never strands a test user.
+USER_ID=""
+cleanup() {
+  [ -n "$USER_ID" ] && curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$USER_ID" \
+    -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true
+}
+trap cleanup EXIT
+
 step "1. Create throwaway user via admin API"
 USER_ID=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \

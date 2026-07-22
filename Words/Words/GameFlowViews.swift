@@ -72,6 +72,7 @@ struct GameOverView: View {
         case .localEmptied: return "You played all your tiles"
         case .opponentEmptied: return "\(opponentName) played all their tiles"
         case .sixPasses: return "Six passes in a row"
+        case .resigned: return "The game ended by resignation"
         }
     }
 
@@ -83,6 +84,8 @@ struct GameOverView: View {
             return "\(opponentName) gains +\(summary.localLeftover) from your leftover tiles (you −\(summary.localLeftover))"
         case .sixPasses:
             return "Leftover tiles: you −\(summary.localLeftover), \(opponentName) −\(summary.opponentLeftover)"
+        case .resigned:
+            return "Final scores as they stood"
         }
     }
 

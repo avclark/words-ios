@@ -66,7 +66,11 @@ enum AIPlayer {
             }
         }
         guard !moves.isEmpty else { return nil }
-        moves.sort { $0.score > $1.score }
+        // Alphabetical tie-break makes the pick deterministic: candidate
+        // emission order varies with dictionary hash order per process, and
+        // equal-score ties (e.g. QUICK vs QUIRK off a blank) would otherwise
+        // flip between runs.
+        moves.sort { $0.score != $1.score ? $0.score > $1.score : $0.word < $1.word }
         let index: Int
         switch difficulty {
         case .hard: index = 0
