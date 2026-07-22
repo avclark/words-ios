@@ -94,3 +94,44 @@ previous React Native version and may be reconnected later.
 ## Git
 
 Never create commits. The user commits manually. You may edit files and stage changes, but do not run git commit.
+## Current status (end of session, 2026-07-21)
+
+**Completed: Phases 0–4** of the local single-player build (per PRODUCT-SPEC.md
+build order). The game is playable end to end on device; all changes are
+uncommitted in the working tree pending Adam's device testing of Phase 4.
+
+- Phase 0: home screen shell, new-game/exit flow (RootView swaps HomeView ↔
+  GameView; fresh UUID identity per game).
+- Phase 1: real game — 100-tile bag, bundled ENABLE dictionary (Lexicon.swift,
+  fails loudly if missing), full move validation + scoring via playMove().
+  This supersedes "dictionary validation" in Out of scope above.
+- Phase 2: AI opponent — Appel–Jacobson generator (AIPlayer.swift: anchors,
+  trie, cross-checks, transpose for vertical, real blank handling). Scoring
+  shared via MoveScorer.swift (one path for preview/player/AI). 7 unit tests
+  in WordsTests verify generator legality with rigged boards.
+- Phase 3: pass, swap (remove→return→reshuffle→draw), endgame detection
+  (bag+rack empty, or 6 passes), final-score math, game-over overlay.
+- Phase 4: player/opponent abstraction — Player/PlayerProfile (stable UUID
+  identity), OpponentEngine seam (Opponent.swift; LocalAIOpponent wraps the
+  generator; actions carry no score — BoardState re-scores everything),
+  TurnState .local/.opponent ("waiting" is a real state), GameHeaderView
+  (avatars/scores/turn/bag/pass/move log), thin profile editor on Home
+  (LocalProfile in UserDefaults).
+
+**Next: Phase 5** — home screen as game lobby (list of games, not one button)
++ game setup (AI difficulty) + local game persistence. Then Phase 6 (profile
+stats), backend design, multiplayer (see PRODUCT-SPEC.md).
+
+Session learnings not captured elsewhere:
+- ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",
+  "nos"… check assumptions. When writing generator tests with rigged boards,
+  grep enable1.txt for EVERY word/non-word assumption first — two test rigs
+  failed because the generator legally outplayed the hand analysis.
+- `xcodebuild test` console doesn't show #expect failure details or print()
+  from Swift Testing. Use `-resultBundlePath` + `xcrun xcresulttool get
+  test-results summary` and read `testFailures[].failureText` (Issue.record
+  strings land there).
+- Unit tests run on the iPhone 16 Pro simulator; trie build + all 7 tests
+  finish in ~1s, so run them before every device deploy.
+- New .swift files are picked up automatically (synchronized project groups) —
+  no pbxproj editing needed.
