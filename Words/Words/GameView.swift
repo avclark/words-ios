@@ -87,7 +87,9 @@ struct GameView: View {
     private var readout: some View {
         VStack(spacing: 4) {
             HStack {
-                Text("Score \(state.totalScore)")
+                Text("You \(state.totalScore)")
+                Spacer()
+                Text("AI \(state.aiTotalScore)")
                 Spacer()
                 Text("Turn \(state.turnNumber)")
                 Spacer()
@@ -101,9 +103,23 @@ struct GameView: View {
                 case .rejected(let reason):
                     Text(reason).foregroundStyle(.red)
                 case .played(let words, let score):
-                    Text("Played \(words.joined(separator: ", ")) +\(score) · opponent passed")
+                    Text("You played \(words.joined(separator: ", ")) +\(score)")
                         .foregroundStyle(.green)
                 case nil:
+                    Text(" ")
+                }
+            }
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Group {
+                if state.isAIThinking {
+                    Text("AI is thinking…").foregroundStyle(.orange)
+                } else if let aiMessage = state.aiMessage {
+                    Text(aiMessage).foregroundStyle(.cyan)
+                } else {
                     Text(" ")
                 }
             }
@@ -151,7 +167,7 @@ struct GameView: View {
     }
 
     private var canPlay: Bool {
-        state.currentScore() != nil && state.pendingBlank == nil
+        state.currentScore() != nil && state.pendingBlank == nil && !state.isAIThinking
     }
 
     private var playLabel: String {

@@ -24,6 +24,18 @@ final class BoardState {
     /// Result of the most recent PLAY tap; cleared when the placement changes.
     private(set) var status: PlayStatus?
 
+    /// The AI opponent's rack (hidden from the UI except for its count).
+    private(set) var aiRack: [Tile] = []
+    private(set) var aiTotalScore = 0
+    /// True while the AI computes its move on a background queue.
+    private(set) var isAIThinking = false
+    /// What the AI did last turn; persists while the player builds a move.
+    private(set) var aiMessage: String?
+
+    /// One scorer shared by preview, player validation, and the AI so the
+    /// scoring path can never fork.
+    private var scorer: MoveScorer { MoveScorer(board: committed) }
+
     /// Set when a blank tile lands on the board and needs a letter.
     var pendingBlank: BoardCoord?
 
@@ -41,8 +53,13 @@ final class BoardState {
         totalScore = 0
         turnNumber = 1
         status = nil
+        aiTotalScore = 0
+        isAIThinking = false
+        aiMessage = nil
         bag = TileDistribution.fullBag().shuffled()
         rack = draw(7)
+        aiRack = draw(7)
+        AIPlayer.warmUp()
     }
 
     // MARK: - Queries
@@ -155,7 +172,7 @@ final class BoardState {
         }
 
         let horizontal: Bool
-        switch placementLine() {
+        switch scorer.placementLine(placed) {
         case .notALine:
             status = .rejected("Tiles must be in a single row or column")
             return
@@ -182,10 +199,10 @@ final class BoardState {
         // a cross word through each placed tile. Only runs of 2+ count.
         let coords = placed.keys.sorted { ($0.row, $0.col) < ($1.row, $1.col) }
         var formed: [[BoardCoord]] = []
-        let main = wordThrough(coords[0], horizontal: horizontal)
+        let main = scorer.wordThrough(coords[0], horizontal: horizontal, placement: placed)
         if main.count > 1 { formed.append(main) }
         for coord in coords {
-            let cross = wordThrough(coord, horizontal: !horizontal)
+            let cross = scorer.wordThrough(coord, horizontal: !horizontal, placement: placed)
             if cross.count > 1 { formed.append(cross) }
         }
         guard !formed.isEmpty else {
@@ -193,7 +210,7 @@ final class BoardState {
             return
         }
 
-        let wordsFormed = formed.map(string(for:))
+        let wordsFormed = formed.map { scorer.string(for: $0, placement: placed) }
         let invalid = wordsFormed.filter { !Lexicon.contains($0) }
         guard invalid.isEmpty else {
             status = .rejected("Not in dictionary: \(invalid.joined(separator: ", "))")
@@ -211,6 +228,7 @@ final class BoardState {
         refillRack()
         turnNumber += 1
         status = .played(words: wordsFormed, score: score)
+        startAITurn()
     }
 
     /// True if any tile placed this turn is orthogonally adjacent to a tile
@@ -221,10 +239,6 @@ final class BoardState {
                 committed[BoardCoord(row: coord.row + dr, col: coord.col + dc)] != nil
             }
         }
-    }
-
-    private func string(for cells: [BoardCoord]) -> String {
-        String(cells.compactMap { tile(at: $0)?.displayLetter })
     }
 
     private func draw(_ count: Int) -> [Tile] {
@@ -240,103 +254,57 @@ final class BoardState {
 
     // MARK: - Live score preview
 
-    private enum LineCheck {
-        case notALine, gapped, ok(horizontal: Bool)
-    }
-
-    /// Shared line/contiguity check for the score preview and move validation
-    /// — one code path so they can never disagree.
-    private func placementLine() -> LineCheck {
-        let coords = Array(placed.keys)
-        let rows = Set(coords.map(\.row))
-        let cols = Set(coords.map(\.col))
-        let horizontal: Bool
-        if coords.count == 1 { horizontal = true }
-        else if rows.count == 1 { horizontal = true }
-        else if cols.count == 1 { horizontal = false }
-        else { return .notALine }
-
-        // Contiguity: every cell between the extremes must hold a tile
-        // (placed this turn or already committed).
-        if horizontal {
-            let row = rows.first!
-            let minC = cols.min()!, maxC = cols.max()!
-            for c in minC...maxC where tile(at: BoardCoord(row: row, col: c)) == nil { return .gapped }
-        } else {
-            let col = cols.first!
-            let minR = rows.min()!, maxR = rows.max()!
-            for r in minR...maxR where tile(at: BoardCoord(row: r, col: col)) == nil { return .gapped }
-        }
-        return .ok(horizontal: horizontal)
-    }
-
     /// Score for the tiles placed this turn, or nil if the placement is not
     /// a single contiguous line (Scrabble GO greys the score chip out then).
-    /// Includes cross-words and premium squares. Dictionary/connection checks
-    /// happen in playMove(), not here — this is just the live preview.
+    /// Full logic lives in MoveScorer, shared with playMove() and the AI.
     func currentScore() -> Int? {
-        guard !placed.isEmpty else { return nil }
-        guard case .ok(let horizontal) = placementLine() else { return nil }
-        let coords = Array(placed.keys)
-
-        var total = 0
-        var scoredMain = false
-        let mainWord = wordThrough(coords[0], horizontal: horizontal)
-        if mainWord.count > 1 {
-            total += score(word: mainWord)
-            scoredMain = true
-        }
-        for coord in coords {
-            let cross = wordThrough(coord, horizontal: !horizontal)
-            if cross.count > 1 { total += score(word: cross) }
-        }
-        // A lone tile with no neighbors forms no word yet; preview its face
-        // value so the chip isn't blank. (Never a legal play — playMove
-        // rejects it.) A lone tile WITH neighbors is fully counted by the
-        // main/cross words above; adding its solo run too would double-count.
-        if !scoredMain, total == 0, coords.count == 1 {
-            total = score(word: mainWord)
-        }
-        guard scoredMain || total > 0 else { return nil }
-        if placed.count == 7 { total += 50 } // bingo
-        return total
+        scorer.score(placed)
     }
 
-    /// The maximal run of occupied cells through `coord` along one axis.
-    private func wordThrough(_ coord: BoardCoord, horizontal: Bool) -> [BoardCoord] {
-        let dr = horizontal ? 0 : 1
-        let dc = horizontal ? 1 : 0
-        var start = coord
-        while true {
-            let prev = BoardCoord(row: start.row - dr, col: start.col - dc)
-            if prev.isValid && isOccupied(prev) { start = prev } else { break }
-        }
-        var cells: [BoardCoord] = []
-        var cur = start
-        while cur.isValid && isOccupied(cur) {
-            cells.append(cur)
-            cur = BoardCoord(row: cur.row + dr, col: cur.col + dc)
-        }
-        return cells
-    }
+    // MARK: - AI turn
 
-    private func score(word cells: [BoardCoord]) -> Int {
-        var sum = 0
-        var wordMultiplier = 1
-        for coord in cells {
-            guard let tile = tile(at: coord) else { continue }
-            var letterScore = tile.points
-            // Premiums only apply to tiles placed this turn.
-            if isPlacedThisTurn(coord), let premium = PremiumLayout.squares[coord] {
-                switch premium {
-                case .doubleLetter: letterScore *= 2
-                case .tripleLetter: letterScore *= 3
-                case .doubleWord: wordMultiplier *= 2
-                case .tripleWord: wordMultiplier *= 3
-                }
+    /// Compute the AI's move on a background queue (generation can take a
+    /// moment on a crowded board), then apply it on the main queue. The
+    /// player's PLAY button is disabled while this runs, so `committed` and
+    /// the bag can't change underneath the computation.
+    private func startAITurn() {
+        guard !aiRack.isEmpty else {
+            aiMessage = "AI has no tiles — passed"
+            return
+        }
+        isAIThinking = true
+        aiMessage = nil
+        let board = committed
+        let aiTiles = aiRack
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let move = AIPlayer.bestMove(board: board, rack: aiTiles)
+            // Small floor delay so the AI's tiles don't materialize the same
+            // instant the player's commit — reads as a turn, not a glitch.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self?.finishAITurn(with: move)
             }
-            sum += letterScore
         }
-        return sum * wordMultiplier
+    }
+
+    private func finishAITurn(with move: AIPlayer.Move?) {
+        isAIThinking = false
+        guard let move else {
+            aiMessage = "AI couldn't find a play — passed"
+            return
+        }
+        // The player may have tentatively placed tiles while the AI thought;
+        // bounce any that sit on cells the AI's move needs back to the rack.
+        for coord in move.placement.keys where placed[coord] != nil {
+            returnToRack(from: coord)
+        }
+        for (coord, tile) in move.placement { committed[coord] = tile }
+        for tile in move.placement.values {
+            if let idx = aiRack.firstIndex(where: { $0.letter == tile.letter }) {
+                aiRack.remove(at: idx)
+            }
+        }
+        aiTotalScore += move.score
+        aiRack.append(contentsOf: draw(7 - aiRack.count))
+        aiMessage = "AI played \(move.word) +\(move.score)"
     }
 }
