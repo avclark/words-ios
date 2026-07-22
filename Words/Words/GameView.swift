@@ -7,9 +7,11 @@ struct GameView: View {
     static let spaceName = "game"
 
     var onExit: (() -> Void)? = nil
+    var onNewGame: (() -> Void)? = nil
 
     @State private var state = BoardState()
     @State private var drag = DragController()
+    @State private var showSwapSheet = false
 
     var body: some View {
         GeometryReader { geo in
@@ -46,6 +48,15 @@ struct GameView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(red: 0.05, green: 0.07, blue: 0.13).ignoresSafeArea())
             .overlay(alignment: .topLeading) { floatingTile }
+            // Game over is an overlay, not a view swap: the board hierarchy
+            // must never be torn down while a gesture could be live.
+            .overlay {
+                if let summary = state.gameOver {
+                    GameOverView(summary: summary,
+                                 onHome: { onExit?() },
+                                 onNewGame: { onNewGame?() })
+                }
+            }
         }
         .coordinateSpace(name: Self.spaceName)
         .sheet(isPresented: blankSheetShown) {
@@ -94,6 +105,8 @@ struct GameView: View {
                 Text("Turn \(state.turnNumber)")
                 Spacer()
                 Text("Bag \(state.bag.count)")
+                Spacer()
+                Text("Pass \(state.consecutivePasses)/6")
             }
             .font(.system(size: 14, weight: .semibold, design: .rounded))
             .foregroundStyle(.white.opacity(0.7))
@@ -105,6 +118,8 @@ struct GameView: View {
                 case .played(let words, let score):
                     Text("You played \(words.joined(separator: ", ")) +\(score)")
                         .foregroundStyle(.green)
+                case .info(let message):
+                    Text(message).foregroundStyle(.white.opacity(0.8))
                 case nil:
                     Text(" ")
                 }
@@ -132,7 +147,7 @@ struct GameView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             ActionButton(icon: "shuffle", label: "Shuffle") {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                     state.shuffleRack()
@@ -161,9 +176,30 @@ struct GameView: View {
                 }
                 drag.refreshZoom(state: state)
             }
+
+            ActionButton(icon: "arrow.2.squarepath", label: "Swap") {
+                showSwapSheet = true
+            }
+            .disabled(state.isAIThinking || state.gameOver != nil || state.bag.isEmpty)
+            .opacity(state.bag.isEmpty ? 0.4 : 1)
+
+            ActionButton(icon: "forward.end", label: "Pass") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    state.passTurn()
+                }
+                drag.refreshZoom(state: state)
+            }
+            .disabled(state.isAIThinking || state.gameOver != nil)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
+        .sheet(isPresented: $showSwapSheet) {
+            SwapView(rack: state.rack, bagCount: state.bag.count) { ids in
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    state.swapTiles(ids: ids)
+                }
+            }
+        }
     }
 
     private var canPlay: Bool {
@@ -257,7 +293,7 @@ private struct ActionButton: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundStyle(.white.opacity(0.8))
-            .frame(width: 62, height: 50)
+            .frame(width: 52, height: 50)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.white.opacity(0.08))

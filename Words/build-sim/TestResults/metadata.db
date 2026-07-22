@@ -13,37 +13,37 @@
 				<key>blankCompletesHighValueWord</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54774212837219238</real>
+					<real>0.54808902740478516</real>
 				</dict>
 				<key>blankInRackYieldsLegalPlay</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.59993815422058105</real>
+					<real>0.60473799705505371</real>
 				</dict>
 				<key>invalidCrossWordIsRejected</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54355907440185547</real>
+					<real>0.54050397872924805</real>
 				</dict>
 				<key>movesOnExistingBoardAreLegal</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.5516819953918457</real>
+					<real>0.55030608177185059</real>
 				</dict>
 				<key>openingMoveCoversCenterAndIsLegal</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.59206986427307129</real>
+					<real>0.5947418212890625</real>
 				</dict>
 				<key>unplayableRackReturnsNil</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54159188270568848</real>
+					<real>0.54035305976867676</real>
 				</dict>
 				<key>verticalOnlyBoardYieldsVerticalPlay</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54331398010253906</real>
+					<real>0.54052186012268066</real>
 				</dict>
 			</dict>
 		</dict>

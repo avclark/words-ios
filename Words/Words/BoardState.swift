@@ -5,6 +5,23 @@ import Observation
 enum PlayStatus: Equatable {
     case rejected(String)
     case played(words: [String], score: Int)
+    case info(String) // pass/swap confirmations
+}
+
+/// Final result once the game ends. Scores here already include the
+/// endgame math from GAME-LOGIC-REFERENCE.md: each player loses their
+/// leftover tile values; a player who emptied their rack gains the
+/// opponent's leftovers.
+struct GameOverSummary: Equatable {
+    enum Reason: Equatable {
+        case playerEmptied, aiEmptied, sixPasses
+    }
+    let reason: Reason
+    let playerFinal: Int
+    let aiFinal: Int
+    /// Face value of tiles left on each rack when the game ended.
+    let playerLeftover: Int
+    let aiLeftover: Int
 }
 
 /// All game state for a local single-player game. No networking.
@@ -31,6 +48,11 @@ final class BoardState {
     private(set) var isAIThinking = false
     /// What the AI did last turn; persists while the player builds a move.
     private(set) var aiMessage: String?
+    /// Passes in a row by either side; 6 ends the game (3 each, per the
+    /// reference doc). A scoring move or a swap resets it.
+    private(set) var consecutivePasses = 0
+    /// Non-nil once the game has ended.
+    private(set) var gameOver: GameOverSummary?
 
     /// One scorer shared by preview, player validation, and the AI so the
     /// scoring path can never fork.
@@ -56,6 +78,8 @@ final class BoardState {
         aiTotalScore = 0
         isAIThinking = false
         aiMessage = nil
+        consecutivePasses = 0
+        gameOver = nil
         bag = TileDistribution.fullBag().shuffled()
         rack = draw(7)
         aiRack = draw(7)
@@ -165,7 +189,7 @@ final class BoardState {
     /// banks, and the rack refills. On rejection the tiles stay on the board
     /// and `status` explains why.
     func playMove() {
-        guard !placed.isEmpty else { return }
+        guard gameOver == nil, !isAIThinking, !placed.isEmpty else { return }
         guard pendingBlank == nil else {
             status = .rejected("Pick a letter for the blank tile first")
             return
@@ -227,8 +251,84 @@ final class BoardState {
         totalScore += score
         refillRack()
         turnNumber += 1
+        consecutivePasses = 0
         status = .played(words: wordsFormed, score: score)
+        // Endgame: bag empty and the player used every tile — the game ends
+        // now; the AI does not get another turn.
+        if bag.isEmpty && rack.isEmpty {
+            endGame(reason: .playerEmptied)
+            return
+        }
         startAITurn()
+    }
+
+    // MARK: - Pass & swap
+
+    /// Forfeit the turn without playing. Any tentatively placed tiles are
+    /// recalled first. Six consecutive passes (by either side) end the game.
+    func passTurn() {
+        guard gameOver == nil, !isAIThinking else { return }
+        recallAll()
+        turnNumber += 1
+        consecutivePasses += 1
+        status = .info("You passed")
+        if consecutivePasses >= 6 {
+            endGame(reason: .sixPasses)
+            return
+        }
+        startAITurn()
+    }
+
+    /// Whether a swap of `count` tiles is currently allowed.
+    func canSwap(count: Int) -> Bool {
+        gameOver == nil && !isAIThinking && count > 0 && bag.count >= count
+    }
+
+    /// Exchange the chosen rack tiles, forfeiting the turn. Ordering per
+    /// GAME-LOGIC-REFERENCE.md: remove from rack → return to bag →
+    /// RESHUFFLE → then draw replacements.
+    func swapTiles(ids: Set<Tile.ID>) {
+        guard canSwap(count: ids.count) else { return }
+        recallAll()
+        var discarded: [Tile] = []
+        rack.removeAll { tile in
+            guard ids.contains(tile.id) else { return false }
+            var t = tile
+            t.assignedLetter = nil
+            discarded.append(t)
+            return true
+        }
+        guard !discarded.isEmpty else { return }
+        bag.append(contentsOf: discarded)
+        bag.shuffle()
+        rack.append(contentsOf: draw(discarded.count))
+        turnNumber += 1
+        consecutivePasses = 0 // a swap is an action, not a pass
+        status = .info("Swapped \(discarded.count) tile\(discarded.count == 1 ? "" : "s")")
+        startAITurn()
+    }
+
+    // MARK: - Endgame
+
+    /// Apply the endgame math from GAME-LOGIC-REFERENCE.md: each player
+    /// loses the sum of their leftover tile values; a player who emptied
+    /// their rack gains the total of the opponent's leftovers.
+    private func endGame(reason: GameOverSummary.Reason) {
+        isAIThinking = false
+        let playerLeft = rack.reduce(0) { $0 + $1.points }
+        let aiLeft = aiRack.reduce(0) { $0 + $1.points }
+        totalScore -= playerLeft
+        aiTotalScore -= aiLeft
+        switch reason {
+        case .playerEmptied: totalScore += aiLeft
+        case .aiEmptied: aiTotalScore += playerLeft
+        case .sixPasses: break
+        }
+        gameOver = GameOverSummary(reason: reason,
+                                   playerFinal: totalScore,
+                                   aiFinal: aiTotalScore,
+                                   playerLeftover: playerLeft,
+                                   aiLeftover: aiLeft)
     }
 
     /// True if any tile placed this turn is orthogonally adjacent to a tile
@@ -268,8 +368,9 @@ final class BoardState {
     /// player's PLAY button is disabled while this runs, so `committed` and
     /// the bag can't change underneath the computation.
     private func startAITurn() {
+        guard gameOver == nil else { return }
         guard !aiRack.isEmpty else {
-            aiMessage = "AI has no tiles — passed"
+            aiPassed("AI has no tiles — passed")
             return
         }
         isAIThinking = true
@@ -288,8 +389,9 @@ final class BoardState {
 
     private func finishAITurn(with move: AIPlayer.Move?) {
         isAIThinking = false
+        guard gameOver == nil else { return }
         guard let move else {
-            aiMessage = "AI couldn't find a play — passed"
+            aiPassed("AI couldn't find a play — passed")
             return
         }
         // The player may have tentatively placed tiles while the AI thought;
@@ -306,5 +408,18 @@ final class BoardState {
         aiTotalScore += move.score
         aiRack.append(contentsOf: draw(7 - aiRack.count))
         aiMessage = "AI played \(move.word) +\(move.score)"
+        consecutivePasses = 0
+        // Endgame: bag empty and the AI used every tile.
+        if bag.isEmpty && aiRack.isEmpty {
+            endGame(reason: .aiEmptied)
+        }
+    }
+
+    private func aiPassed(_ message: String) {
+        aiMessage = message
+        consecutivePasses += 1
+        if consecutivePasses >= 6 {
+            endGame(reason: .sixPasses)
+        }
     }
 }

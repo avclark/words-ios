@@ -17,7 +17,8 @@ struct RootView: View {
 
     var body: some View {
         if let gameID {
-            GameView(onExit: { self.gameID = nil })
+            GameView(onExit: { self.gameID = nil },
+                     onNewGame: { self.gameID = UUID() })
                 .id(gameID)
         } else {
             HomeView(onNewGame: { gameID = UUID() })
