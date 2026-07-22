@@ -56,31 +56,33 @@ struct SwapView: View {
 /// underneath is never torn down (see CLAUDE.md invariant 2).
 struct GameOverView: View {
     let summary: GameOverSummary
+    let localName: String
+    let opponentName: String
     let onHome: () -> Void
     let onNewGame: () -> Void
 
     private var winnerText: String {
-        if summary.playerFinal > summary.aiFinal { return "You win!" }
-        if summary.playerFinal < summary.aiFinal { return "AI wins" }
+        if summary.localFinal > summary.opponentFinal { return "You win!" }
+        if summary.localFinal < summary.opponentFinal { return "\(opponentName) wins" }
         return "It's a tie"
     }
 
     private var reasonText: String {
         switch summary.reason {
-        case .playerEmptied: return "You played all your tiles"
-        case .aiEmptied: return "AI played all its tiles"
+        case .localEmptied: return "You played all your tiles"
+        case .opponentEmptied: return "\(opponentName) played all their tiles"
         case .sixPasses: return "Six passes in a row"
         }
     }
 
     private var adjustmentText: String {
         switch summary.reason {
-        case .playerEmptied:
-            return "You gain +\(summary.aiLeftover) from AI's leftover tiles (AI −\(summary.aiLeftover))"
-        case .aiEmptied:
-            return "AI gains +\(summary.playerLeftover) from your leftover tiles (you −\(summary.playerLeftover))"
+        case .localEmptied:
+            return "You gain +\(summary.opponentLeftover) from \(opponentName)'s leftover tiles (\(opponentName) −\(summary.opponentLeftover))"
+        case .opponentEmptied:
+            return "\(opponentName) gains +\(summary.localLeftover) from your leftover tiles (you −\(summary.localLeftover))"
         case .sixPasses:
-            return "Leftover tiles: you −\(summary.playerLeftover), AI −\(summary.aiLeftover)"
+            return "Leftover tiles: you −\(summary.localLeftover), \(opponentName) −\(summary.opponentLeftover)"
         }
     }
 
@@ -92,7 +94,7 @@ struct GameOverView: View {
                 .foregroundStyle(.secondary)
             Text(winnerText)
                 .font(.title)
-            Text("You \(summary.playerFinal) — AI \(summary.aiFinal)")
+            Text("\(localName) \(summary.localFinal) — \(opponentName) \(summary.opponentFinal)")
                 .font(.title3)
             Text(adjustmentText)
                 .font(.caption)

@@ -9,9 +9,17 @@ struct GameView: View {
     var onExit: (() -> Void)? = nil
     var onNewGame: (() -> Void)? = nil
 
-    @State private var state = BoardState()
+    @State private var state: BoardState
     @State private var drag = DragController()
     @State private var showSwapSheet = false
+
+    init(profile: PlayerProfile = LocalProfile.load(),
+         onExit: (() -> Void)? = nil,
+         onNewGame: (() -> Void)? = nil) {
+        self.onExit = onExit
+        self.onNewGame = onNewGame
+        _state = State(initialValue: BoardState(localProfile: profile))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -22,8 +30,14 @@ struct GameView: View {
             let rackTile = min(46, (geo.size.width - 90) / 7)
 
             VStack(spacing: 14) {
-                header
-                readout
+                GameHeaderView(local: state.localPlayer,
+                               opponent: state.opponent,
+                               turnState: state.turnState,
+                               bagCount: state.bag.count,
+                               passes: state.consecutivePasses,
+                               logLine: state.moveLog.last,
+                               rejection: rejectionText,
+                               onBack: { onExit?() })
 
                 Spacer(minLength: 0)
 
@@ -53,6 +67,8 @@ struct GameView: View {
             .overlay {
                 if let summary = state.gameOver {
                     GameOverView(summary: summary,
+                                 localName: state.localPlayer.profile.displayName,
+                                 opponentName: state.opponent.profile.displayName,
                                  onHome: { onExit?() },
                                  onNewGame: { onNewGame?() })
                 }
@@ -71,79 +87,9 @@ struct GameView: View {
 
     // MARK: - Pieces
 
-    private var header: some View {
-        HStack {
-            if let onExit {
-                Button(action: onExit) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-            }
-            Text("WORDS")
-                .font(.system(size: 22, weight: .black, design: .rounded))
-                .foregroundStyle(Color.yellow)
-                .kerning(4)
-            Spacer()
-            Text("board prototype")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.4))
-        }
-        .padding(.horizontal, 20)
-    }
-
-    /// Bare-bones game readout for testing — real design pass comes later.
-    private var readout: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text("You \(state.totalScore)")
-                Spacer()
-                Text("AI \(state.aiTotalScore)")
-                Spacer()
-                Text("Turn \(state.turnNumber)")
-                Spacer()
-                Text("Bag \(state.bag.count)")
-                Spacer()
-                Text("Pass \(state.consecutivePasses)/6")
-            }
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.7))
-
-            Group {
-                switch state.status {
-                case .rejected(let reason):
-                    Text(reason).foregroundStyle(.red)
-                case .played(let words, let score):
-                    Text("You played \(words.joined(separator: ", ")) +\(score)")
-                        .foregroundStyle(.green)
-                case .info(let message):
-                    Text(message).foregroundStyle(.white.opacity(0.8))
-                case nil:
-                    Text(" ")
-                }
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Group {
-                if state.isAIThinking {
-                    Text("AI is thinking…").foregroundStyle(.orange)
-                } else if let aiMessage = state.aiMessage {
-                    Text(aiMessage).foregroundStyle(.cyan)
-                } else {
-                    Text(" ")
-                }
-            }
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 20)
+    private var rejectionText: String? {
+        if case .rejected(let reason) = state.status { return reason }
+        return nil
     }
 
     private var actionBar: some View {
@@ -180,7 +126,7 @@ struct GameView: View {
             ActionButton(icon: "arrow.2.squarepath", label: "Swap") {
                 showSwapSheet = true
             }
-            .disabled(state.isAIThinking || state.gameOver != nil || state.bag.isEmpty)
+            .disabled(state.waitingForOpponent || state.gameOver != nil || state.bag.isEmpty)
             .opacity(state.bag.isEmpty ? 0.4 : 1)
 
             ActionButton(icon: "forward.end", label: "Pass") {
@@ -189,7 +135,7 @@ struct GameView: View {
                 }
                 drag.refreshZoom(state: state)
             }
-            .disabled(state.isAIThinking || state.gameOver != nil)
+            .disabled(state.waitingForOpponent || state.gameOver != nil)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
@@ -203,7 +149,7 @@ struct GameView: View {
     }
 
     private var canPlay: Bool {
-        state.currentScore() != nil && state.pendingBlank == nil && !state.isAIThinking
+        state.currentScore() != nil && state.pendingBlank == nil && !state.waitingForOpponent
     }
 
     private var playLabel: String {
