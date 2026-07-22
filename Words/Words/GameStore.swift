@@ -10,6 +10,10 @@ struct SavedGame: Identifiable, Codable {
     let createdAt: Date
     var updatedAt: Date
     var difficulty: AIDifficulty
+    /// Phase 7: non-nil means the game is server-backed — the bag lives on
+    /// the server and `bag` below stays empty. Nil = pre-Phase-7 local game
+    /// (not yet migrated) whose bag is still in `bag`.
+    var bagCount: Int?
 
     var committed: [BoardCoord: Tile]
     /// Tiles tentatively placed this turn — preserved so quitting mid-move
@@ -54,6 +58,35 @@ final class GameStore {
         try? FileManager.default.createDirectory(at: self.directory,
                                                  withIntermediateDirectories: true)
         loadAll()
+    }
+
+    /// Per-account cache: Games/<userID>/. Signing out keeps the files
+    /// (inaccessible to other accounts); account deletion wipes them.
+    /// Pre-Phase-7 games saved at the Games/ root are adopted into this
+    /// user's cache the first time — Phases 5–6 were single-user by
+    /// construction, so every root file belongs to whoever signs in first.
+    convenience init(userID: UUID) {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        let root = base.appendingPathComponent("Games", isDirectory: true)
+        let dir = root.appendingPathComponent(userID.uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let legacy = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil) {
+            for file in legacy where file.pathExtension == "json" {
+                try? FileManager.default.moveItem(
+                    at: file, to: dir.appendingPathComponent(file.lastPathComponent))
+            }
+        }
+        self.init(directory: dir)
+    }
+
+    /// Account deletion: the server data is gone; drop the local cache too.
+    func wipe() {
+        for game in games {
+            try? FileManager.default.removeItem(at: fileURL(for: game.id))
+        }
+        games = []
     }
 
     /// Lobby order: your-turn games first, then waiting, then finished;

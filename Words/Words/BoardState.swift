@@ -48,6 +48,30 @@ final class BoardState {
     /// touches storage itself.
     var onAutosave: ((BoardState) -> Void)?
 
+    /// A turn-consuming action, reported for background sync. Remote games
+    /// apply every move locally first (optimistic UI) and GameSync pushes
+    /// the intent afterwards — the board never waits on the network.
+    struct RemoteMove {
+        enum Kind {
+            case play(placements: [BoardCoord: Tile], word: String, score: Int)
+            case pass
+            case swap([Tile])
+        }
+        let seat: Int
+        let kind: Kind
+    }
+    var onRemoteMove: ((BoardState, RemoteMove) -> Void)?
+    var onGameFinished: ((BoardState, GameOverSummary) -> Void)?
+
+    /// Phase 7 remote seam. Non-nil means this game's bag lives on the
+    /// server: the client never draws tiles locally; refills arrive via
+    /// applyServerDraw when a move syncs.
+    private(set) var remoteBagCount: Int?
+    var isRemote: Bool { remoteBagCount != nil }
+    /// The one source for "tiles left" — server-authoritative for remote
+    /// games, the local bag for legacy/local games (and unit tests).
+    var bagRemaining: Int { remoteBagCount ?? bag.count }
+
     /// Tiles locked into the board from previous turns.
     private(set) var committed: [BoardCoord: Tile] = [:]
     /// Tiles tentatively placed this turn (still movable/recallable).
@@ -118,6 +142,22 @@ final class BoardState {
         AIPlayer.warmUp()
     }
 
+    /// A fresh server-created game: the server built the bag and dealt both
+    /// racks (create_game); the client holds the AI rack because it runs
+    /// the AI engine.
+    init(remoteID: UUID, myRack: [Tile], aiRack: [Tile], bagCount: Int,
+         localProfile: PlayerProfile, difficulty: AIDifficulty) {
+        self.gameID = remoteID
+        self.createdAt = Date()
+        self.difficulty = difficulty
+        self.opponentEngine = LocalAIOpponent(difficulty: difficulty)
+        _ = Lexicon.words
+        remoteBagCount = bagCount
+        players = [Player(profile: localProfile, rack: myRack),
+                   Player(profile: .ai, rack: aiRack)]
+        AIPlayer.warmUp()
+    }
+
     /// Restore a persisted game exactly where it left off.
     init(from saved: SavedGame, opponentEngine: OpponentEngine? = nil) {
         self.gameID = saved.id
@@ -135,9 +175,15 @@ final class BoardState {
         consecutivePasses = saved.consecutivePasses
         moveLog = saved.moveLog
         gameOver = saved.gameOver
+        remoteBagCount = saved.bagCount
         AIPlayer.warmUp()
-        // If the app died while the opponent held the turn, the engine's
-        // computation died with it — hand the turn over again.
+    }
+
+    /// If the app died while the opponent held the turn, the engine's
+    /// computation died with it — hand the turn over again. Separate from
+    /// init(from:) so the owner can wire callbacks (autosave, remote sync)
+    /// before any engine action flows.
+    func resumeOpponentTurnIfNeeded() {
         if turnState == .opponent && gameOver == nil {
             beginOpponentTurn()
         }
@@ -150,6 +196,7 @@ final class BoardState {
                   createdAt: createdAt,
                   updatedAt: Date(),
                   difficulty: difficulty,
+                  bagCount: remoteBagCount,
                   committed: committed,
                   placed: placed,
                   pendingBlank: pendingBlank,
@@ -327,17 +374,24 @@ final class BoardState {
             return
         }
 
+        let placement = placed
         for (coord, tile) in placed { committed[coord] = tile }
         placed = [:]
         players[localIndex].score += score
-        localRack.append(contentsOf: draw(7 - localRack.count))
+        if isRemote {
+            // The server draws; the refill arrives via applyServerDraw.
+            onRemoteMove?(self, RemoteMove(seat: 0, kind: .play(
+                placements: placement, word: wordsFormed[0], score: score)))
+        } else {
+            localRack.append(contentsOf: draw(7 - localRack.count))
+        }
         turnNumber += 1
         consecutivePasses = 0
         status = nil
         log("\(localPlayer.profile.displayName) played \(wordsFormed[0]) +\(score)")
         // Endgame: bag empty and the local player used every tile — the game
         // ends now; the opponent does not get another turn.
-        if bag.isEmpty && localRack.isEmpty {
+        if bagRemaining == 0 && localRack.isEmpty {
             endGame(reason: .localEmptied)
         } else {
             beginOpponentTurn()
@@ -356,6 +410,9 @@ final class BoardState {
         consecutivePasses += 1
         status = nil
         log("\(localPlayer.profile.displayName) passed")
+        if isRemote {
+            onRemoteMove?(self, RemoteMove(seat: 0, kind: .pass))
+        }
         if consecutivePasses >= 6 {
             endGame(reason: .sixPasses)
         } else {
@@ -366,7 +423,7 @@ final class BoardState {
 
     /// Whether a swap of `count` tiles is currently allowed.
     func canSwap(count: Int) -> Bool {
-        gameOver == nil && turnState == .local && count > 0 && bag.count >= count
+        gameOver == nil && turnState == .local && count > 0 && bagRemaining >= count
     }
 
     /// Exchange the chosen rack tiles, forfeiting the turn. Ordering per
@@ -384,9 +441,15 @@ final class BoardState {
             return true
         }
         guard !discarded.isEmpty else { return }
-        bag.append(contentsOf: discarded)
-        bag.shuffle()
-        localRack.append(contentsOf: draw(discarded.count))
+        if isRemote {
+            // Server does return → reshuffle → draw; replacements arrive
+            // via applyServerDraw.
+            onRemoteMove?(self, RemoteMove(seat: 0, kind: .swap(discarded)))
+        } else {
+            bag.append(contentsOf: discarded)
+            bag.shuffle()
+            localRack.append(contentsOf: draw(discarded.count))
+        }
         turnNumber += 1
         consecutivePasses = 0 // a swap is an action, not a pass
         status = nil
@@ -441,11 +504,16 @@ final class BoardState {
                 }
             }
             players[opponentIndex].score += score
-            players[opponentIndex].rack.append(contentsOf: draw(7 - players[opponentIndex].rack.count))
+            if isRemote {
+                onRemoteMove?(self, RemoteMove(seat: 1, kind: .play(
+                    placements: placement, word: word, score: score)))
+            } else {
+                players[opponentIndex].rack.append(contentsOf: draw(7 - players[opponentIndex].rack.count))
+            }
             consecutivePasses = 0
             log("\(opponent.profile.displayName) played \(word) +\(score)")
             // Endgame: bag empty and the opponent used every tile.
-            if bag.isEmpty && players[opponentIndex].rack.isEmpty {
+            if bagRemaining == 0 && players[opponentIndex].rack.isEmpty {
                 endGame(reason: .opponentEmptied)
             }
         }
@@ -454,6 +522,9 @@ final class BoardState {
     private func opponentPassed(_ message: String) {
         turnState = .local
         log(message)
+        if isRemote {
+            onRemoteMove?(self, RemoteMove(seat: 1, kind: .pass))
+        }
         consecutivePasses += 1
         if consecutivePasses >= 6 {
             endGame(reason: .sixPasses)
@@ -476,11 +547,24 @@ final class BoardState {
         case .opponentEmptied: players[opponentIndex].score += localLeft
         case .sixPasses: break
         }
-        gameOver = GameOverSummary(reason: reason,
-                                   localFinal: players[localIndex].score,
-                                   opponentFinal: players[opponentIndex].score,
-                                   localLeftover: localLeft,
-                                   opponentLeftover: oppLeft)
+        let summary = GameOverSummary(reason: reason,
+                                      localFinal: players[localIndex].score,
+                                      opponentFinal: players[opponentIndex].score,
+                                      localLeftover: localLeft,
+                                      opponentLeftover: oppLeft)
+        gameOver = summary
+        if isRemote {
+            onGameFinished?(self, summary)
+        }
+    }
+
+    /// Server response to a synced move: the authoritative refill for one
+    /// seat plus the remaining bag count.
+    func applyServerDraw(seat: Int, letters: [Tile], bagCount: Int) {
+        guard isRemote, players.indices.contains(seat) else { return }
+        remoteBagCount = bagCount
+        players[seat].rack.append(contentsOf: letters)
+        onAutosave?(self)
     }
 
     // MARK: - Helpers

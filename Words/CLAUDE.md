@@ -157,9 +157,32 @@ and the pass chip now always visible (dimmed at 0/6).
   swap + Apple provider steps). Identity model: stable ID = auth.users.id,
   Apple = linked row in auth.identities (additive providers later).
 
-**Next:** finish Phase 6 verification (run setup.sql, swap publishable key,
-rotate secret key, then Apple flow once the membership is active). Then
-Phase 7 — data model + game sync (see FEATURE-LIST.md).
+- Phase 7: server-backed games. supabase/phase7_games.sql (MUST be pasted
+  into the SQL editor after setup.sql): games/game_players/moves + RLS,
+  game_private (bag + racks, RLS with ZERO policies — definer RPCs only),
+  minimal friendships/chat stubs. Seats are generic controllers
+  (engine = 'human'|'local_ai'); the client drives AI turns (submits for
+  the AI seat, may read AI racks — the documented rack-privacy exception).
+  Moves are INTENT via submit_move (placements only; server checks turn +
+  rack ownership + cell occupancy; client_score recorded but untrusted —
+  server scoring can land later with no API change). Server deals ALL
+  tiles: remote BoardState never draws locally (isRemote/bagRemaining;
+  refills arrive via applyServerDraw), so playing needs connectivity;
+  board commit + score stay instant (optimistic), refill animates in on
+  the server ack. Client: RemoteGames.swift (DTOs/RPCs), GameSync.swift
+  (@MainActor; per-game FIFO op chains, rejection → rollback to server
+  truth + alert, migrateLocalGames via idempotent import_local_game,
+  refreshLobby reconcile), GameStore per-user dir (Games/<uid>/, adopts
+  legacy root files), SavedGame.bagCount (nil = pre-P7 local game).
+  BoardState re-kick moved from init(from:) to resumeOpponentTurnIfNeeded()
+  so callbacks wire first — callers MUST call it after open.
+  Account deletion: server cascade (cleanup_orphan_games trigger deletes
+  games with no human seat) + local cache wipe via auth.onAccountDeleted.
+  verify_phase7.sh exercises the whole RPC surface with curl.
+  4 remote-mode unit tests added (14 total).
+
+**Next:** run phase7_games.sql + verify_phase7.sh, device-test Phase 7.
+Then Phase 8 — friends & invites (see FEATURE-LIST.md).
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

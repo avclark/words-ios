@@ -26,7 +26,7 @@ struct GameView: View {
                 GameHeaderView(local: state.localPlayer,
                                opponent: state.opponent,
                                turnState: state.turnState,
-                               bagCount: state.bag.count,
+                               bagCount: state.bagRemaining,
                                passes: state.consecutivePasses,
                                logLine: state.moveLog.last,
                                rejection: rejectionText,
@@ -119,8 +119,8 @@ struct GameView: View {
             ActionButton(icon: "arrow.2.squarepath", label: "Swap") {
                 showSwapSheet = true
             }
-            .disabled(state.waitingForOpponent || state.gameOver != nil || state.bag.isEmpty)
-            .opacity(state.bag.isEmpty ? 0.4 : 1)
+            .disabled(state.waitingForOpponent || state.gameOver != nil || state.bagRemaining == 0)
+            .opacity(state.bagRemaining == 0 ? 0.4 : 1)
 
             ActionButton(icon: "forward.end", label: "Pass") {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
@@ -133,7 +133,7 @@ struct GameView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
         .sheet(isPresented: $showSwapSheet) {
-            SwapView(rack: state.rack, bagCount: state.bag.count) { ids in
+            SwapView(rack: state.rack, bagCount: state.bagRemaining) { ids in
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                     state.swapTiles(ids: ids)
                 }

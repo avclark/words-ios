@@ -28,6 +28,9 @@ final class AuthController {
     private(set) var state: State = .loading
     /// Human-readable error from the last auth attempt, for the sign-in UI.
     private(set) var lastError: String?
+    /// Fired after the server confirms account deletion, before local
+    /// sign-out — the owner clears account-local data (game cache) here.
+    var onAccountDeleted: (() -> Void)?
 
     private let client = SupabaseService.client
     /// Raw nonce for the in-flight Apple request; Apple receives its SHA-256.
@@ -124,6 +127,7 @@ final class AuthController {
     func deleteAccount() async -> Bool {
         do {
             try await client.rpc("delete_account").execute()
+            onAccountDeleted?()
             try? await client.auth.signOut(scope: .local)
             state = .signedOut
             return true
