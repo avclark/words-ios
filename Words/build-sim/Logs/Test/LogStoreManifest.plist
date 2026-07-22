@@ -6,10 +6,10 @@
 	<integer>11</integer>
 	<key>logs</key>
 	<dict>
-		<key>98E43C4C-ED39-4697-BD06-9A3CD29B4C0B</key>
+		<key>E7C3117B-90AF-4F7B-87ED-F5DFA4B690D6</key>
 		<dict>
 			<key>auxiliaryLogUniqueIdentifier</key>
-			<string>5D77B09F-87C5-45BE-B636-635CDA65D248</string>
+			<string>910CC3D5-E8D3-4C20-954F-9161D06B10A0</string>
 			<key>auxiliaryObservable</key>
 			<dict>
 				<key>highLevelStatus</key>
@@ -30,7 +30,7 @@
 			<key>domainType</key>
 			<string>com.apple.dt.unit.cocoaUnitTest</string>
 			<key>fileName</key>
-			<string>Test-Words-2026.07.21_20-55-37--0400.xcresult</string>
+			<string>Test-Words-2026.07.21_22-19-04--0400.xcresult</string>
 			<key>hasAuxiliaryLog</key>
 			<true/>
 			<key>hasCoverageData</key>
@@ -42,7 +42,7 @@
 				<key>highLevelStatus</key>
 				<string>S</string>
 				<key>totalCodeCoverage</key>
-				<real>0.24806201550387597</real>
+				<real>0.26211223422795399</real>
 				<key>totalNumberOfAnalyzerIssues</key>
 				<integer>0</integer>
 				<key>totalNumberOfErrors</key>
@@ -61,76 +61,13 @@
 			<key>signature</key>
 			<string>Test Words</string>
 			<key>timeStartedRecording</key>
-			<real>806374537.19350398</real>
+			<real>806379544.91377604</real>
 			<key>timeStoppedRecording</key>
 			<real>0.0</real>
 			<key>title</key>
 			<string>Test Words</string>
 			<key>uniqueIdentifier</key>
-			<string>98E43C4C-ED39-4697-BD06-9A3CD29B4C0B</string>
-		</dict>
-		<key>F1F864E0-F15B-48EB-926C-FA146DDBF539</key>
-		<dict>
-			<key>auxiliaryLogUniqueIdentifier</key>
-			<string>4FC7F701-0DE7-40C0-9060-2B3F9574AF98</string>
-			<key>auxiliaryObservable</key>
-			<dict>
-				<key>highLevelStatus</key>
-				<string>S</string>
-				<key>totalNumberOfAnalyzerIssues</key>
-				<integer>0</integer>
-				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
-				<key>totalNumberOfTestFailures</key>
-				<integer>0</integer>
-				<key>totalNumberOfWarnings</key>
-				<integer>0</integer>
-			</dict>
-			<key>className</key>
-			<string>IDESchemeActionsInvocationRecord</string>
-			<key>documentTypeString</key>
-			<string>&lt;nil&gt;</string>
-			<key>domainType</key>
-			<string>com.apple.dt.unit.cocoaUnitTest</string>
-			<key>fileName</key>
-			<string>Test-Words-2026.07.21_20-17-55--0400.xcresult</string>
-			<key>hasAuxiliaryLog</key>
-			<true/>
-			<key>hasCoverageData</key>
-			<true/>
-			<key>hasPrimaryLog</key>
-			<true/>
-			<key>primaryObservable</key>
-			<dict>
-				<key>highLevelStatus</key>
-				<string>S</string>
-				<key>totalCodeCoverage</key>
-				<real>0.20643112346169115</real>
-				<key>totalNumberOfAnalyzerIssues</key>
-				<integer>0</integer>
-				<key>totalNumberOfErrors</key>
-				<integer>0</integer>
-				<key>totalNumberOfTestFailures</key>
-				<integer>0</integer>
-				<key>totalNumberOfWarnings</key>
-				<integer>0</integer>
-			</dict>
-			<key>schemeIdentifier-containerName</key>
-			<string>Words project</string>
-			<key>schemeIdentifier-schemeName</key>
-			<string>Words</string>
-			<key>schemeIdentifier-sharedScheme</key>
-			<integer>1</integer>
-			<key>signature</key>
-			<string>Test Words</string>
-			<key>timeStartedRecording</key>
-			<real>806372275.01825702</real>
-			<key>timeStoppedRecording</key>
-			<real>0.0</real>
-			<key>title</key>
-			<string>Test Words</string>
-			<key>uniqueIdentifier</key>
-			<string>F1F864E0-F15B-48EB-926C-FA146DDBF539</string>
+			<string>E7C3117B-90AF-4F7B-87ED-F5DFA4B690D6</string>
 		</dict>
 	</dict>
 </dict>

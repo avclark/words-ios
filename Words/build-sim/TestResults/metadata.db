@@ -13,37 +13,37 @@
 				<key>blankCompletesHighValueWord</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.55580711364746094</real>
+					<real>0.54103803634643555</real>
 				</dict>
 				<key>blankInRackYieldsLegalPlay</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.61288094520568848</real>
+					<real>0.59353899955749512</real>
 				</dict>
 				<key>invalidCrossWordIsRejected</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54882693290710449</real>
+					<real>0.53496909141540527</real>
 				</dict>
 				<key>movesOnExistingBoardAreLegal</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.55880904197692871</real>
+					<real>0.54434585571289062</real>
 				</dict>
 				<key>openingMoveCoversCenterAndIsLegal</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.60345196723937988</real>
+					<real>0.584259033203125</real>
 				</dict>
 				<key>unplayableRackReturnsNil</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54866790771484375</real>
+					<real>0.53420400619506836</real>
 				</dict>
 				<key>verticalOnlyBoardYieldsVerticalPlay</key>
 				<dict>
 					<key>mrnet</key>
-					<real>0.54884195327758789</real>
+					<real>0.53470587730407715</real>
 				</dict>
 			</dict>
 		</dict>
@@ -54,12 +54,12 @@
 				<key>testExample</key>
 				<dict>
 					<key>mrnet</key>
-					<real>2.1338249444961548</real>
+					<real>2.4636939764022827</real>
 				</dict>
 				<key>testLaunchPerformance</key>
 				<dict>
 					<key>mrnet</key>
-					<real>18.243062973022461</real>
+					<real>19.197017073631287</real>
 				</dict>
 			</dict>
 			<key>WordsUITestsLaunchTests</key>
@@ -67,7 +67,7 @@
 				<key>testLaunch</key>
 				<dict>
 					<key>mrnet</key>
-					<real>3.5394750833511353</real>
+					<real>3.7617479562759399</real>
 				</dict>
 			</dict>
 		</dict>

@@ -67,11 +67,11 @@ xcodebuild -project Words.xcodeproj -scheme Words -configuration Debug \
   -allowProvisioningUpdates -derivedDataPath build build
 
 # 2. Install over network (devicectl uses the CoreDevice UUID)
-xcrun devicectl device install app --device C3AC3F89-00F5-4B58-A306-A871F4FA067C \
+xcrun devicectl device install app --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
   build/Build/Products/Debug-iphoneos/Words.app
 
 # 3. Launch
-xcrun devicectl device process launch --device C3AC3F89-00F5-4B58-A306-A871F4FA067C \
+xcrun devicectl device process launch --device 82327A4A-AE93-497C-9733-3EBBFAB14323 \
   --terminate-existing com.kittyrobotics.Words.Words
 ```
 

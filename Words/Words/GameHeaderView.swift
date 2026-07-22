@@ -35,9 +35,10 @@ struct GameHeaderView: View {
                         .foregroundStyle(turnState == .local ? Color.yellow : .white.opacity(0.45))
                     HStack(spacing: 5) {
                         chip(icon: "archivebox.fill", text: "\(bagCount)")
-                        if passes > 0 {
-                            chip(icon: "forward.end.fill", text: "\(passes)/6", tint: .orange)
-                        }
+                        // Always mounted so the header never reflows between
+                        // turns; dimmed at 0, lit while a pass streak is live.
+                        chip(icon: "forward.end.fill", text: "\(passes)/6",
+                             tint: passes > 0 ? .orange : .white.opacity(0.3))
                     }
                 }
 

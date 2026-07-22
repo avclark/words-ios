@@ -18,8 +18,11 @@ struct RackView: View {
                 case .gap:
                     Color.clear
                         .frame(width: tileSize, height: tileSize)
-                case .tile(let tile, let hidden):
-                    TileView(tile: tile, size: tileSize, isGhost: hidden)
+                case .tile(let tile, let style):
+                    TileView(tile: tile, size: tileSize, isGhost: style == .ghost)
+                        // Hidden, not removed: the dragged tile's view must
+                        // survive the whole gesture (see slots below).
+                        .opacity(style == .hidden ? 0 : 1)
                         .gesture(rackDrag(tile: tile))
                 }
             }
@@ -37,8 +40,13 @@ struct RackView: View {
     // MARK: - Slots (tiles + a gap while a drag hovers the rack)
 
     private struct Slot: Identifiable {
+        enum TileStyle {
+            case normal
+            case ghost   // dim placeholder (dragged tile, not hovering the rack)
+            case hidden  // invisible — this slot IS the open gap
+        }
         enum Kind {
-            case tile(Tile, hidden: Bool)
+            case tile(Tile, style: TileStyle)
             case gap
         }
         let id: String
@@ -51,30 +59,38 @@ struct RackView: View {
     }
 
     private var slots: [Slot] {
-        var result: [Slot] = []
-        let draggedID = draggedRackTileID
+        let hoverIndex: Int? = drag.active != nil ? drag.rackProposedIndex : nil
 
-        // Visual order excludes the tile currently in hand…
-        var order = state.rack
-        if let draggedID {
-            order.removeAll { $0.id == draggedID }
+        if let draggedID = draggedRackTileID,
+           let from = state.rack.firstIndex(where: { $0.id == draggedID }) {
+            // A rack tile is in hand. Its slot stays in the row for the whole
+            // gesture and doubles as the gap: invisible at the proposed drop
+            // index while hovering, a dim ghost at its original index
+            // otherwise. Two constraints hang on this:
+            //  • the tile's view is never removed mid-gesture (invariant 2 —
+            //    removal kills the drag), and
+            //  • slot count always equals the rack count, so a full rack can
+            //    never overflow its layout.
+            var order = state.rack
+            let dragged = order.remove(at: from)
+            let gapIndex = min(hoverIndex ?? from, order.count)
+            order.insert(dragged, at: gapIndex)
+            return order.map { tile in
+                Slot(id: tile.id.uuidString,
+                     kind: .tile(tile, style: tile.id != draggedID ? .normal
+                                        : hoverIndex != nil ? .hidden : .ghost))
+            }
         }
-        // …and shows an open gap at the proposed drop position.
-        if let gapIndex = drag.rackProposedIndex, drag.active != nil {
-            let clamped = min(max(gapIndex, 0), order.count)
-            for (i, tile) in order.enumerated() {
-                if i == clamped { result.append(Slot(id: "gap", kind: .gap)) }
-                result.append(Slot(id: tile.id.uuidString, kind: .tile(tile, hidden: false)))
-            }
-            if clamped == order.count { result.append(Slot(id: "gap", kind: .gap)) }
-        } else {
-            // No hover: dragged tile's original slot stays as a dim ghost.
-            for tile in state.rack {
-                result.append(Slot(
-                    id: tile.id.uuidString,
-                    kind: .tile(tile, hidden: tile.id == draggedID)
-                ))
-            }
+
+        var result = state.rack.map {
+            Slot(id: $0.id.uuidString, kind: .tile($0, style: .normal))
+        }
+        // A board tile hovering the rack opens an inserted gap. The rack
+        // holds at most 6 tiles whenever a placed tile exists, so this never
+        // exceeds the 7-slot layout.
+        if let hoverIndex {
+            result.insert(Slot(id: "gap", kind: .gap),
+                          at: min(max(hoverIndex, 0), result.count))
         }
         return result
     }
