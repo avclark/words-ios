@@ -6,6 +6,7 @@ import SwiftUI
 struct HomeView: View {
     @Binding var profile: PlayerProfile
     let store: GameStore
+    let auth: AuthController
     let onOpen: (SavedGame) -> Void
     let onNewGame: (AIDifficulty) -> Void
 
@@ -41,7 +42,7 @@ struct HomeView: View {
         }
         .background(Self.background.ignoresSafeArea())
         .sheet(isPresented: $showProfileEditor) {
-            ProfileEditorSheet(profile: $profile)
+            ProfileEditorSheet(profile: $profile, auth: auth)
         }
         .sheet(isPresented: $showNewGameSetup) {
             NewGameSetupSheet { difficulty in
@@ -186,14 +187,16 @@ struct AvatarCircle: View {
 
 // MARK: - Profile editor
 
-/// The thin local profile: name + avatar. Same fields as before Phase 5,
-/// now presented as a sheet off the lobby.
+/// The thin profile: name + avatar (synced to the server when signed in),
+/// plus the account controls — sign out and App-Store-required deletion.
 private struct ProfileEditorSheet: View {
     @Binding var profile: PlayerProfile
+    let auth: AuthController
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmingDelete = false
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             Text("Your profile")
                 .font(.system(size: 18, weight: .bold, design: .rounded))
 
@@ -219,10 +222,62 @@ private struct ProfileEditorSheet: View {
 
             Button("Done") { dismiss() }
                 .buttonStyle(.borderedProminent)
+
+            Divider().overlay(.white.opacity(0.15))
+
+            accountSection
         }
         .padding(24)
         .presentationDetents([.medium])
         .presentationBackground(HomeView.background)
+        .alert("Delete your account?", isPresented: $confirmingDelete) {
+            Button("Delete account", role: .destructive) {
+                Task {
+                    if await auth.deleteAccount() { dismiss() }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently deletes your account and profile from the server. Games saved on this device stay on this device.")
+        }
+    }
+
+    @ViewBuilder
+    private var accountSection: some View {
+        switch auth.state {
+        case .signedIn:
+            VStack(spacing: 12) {
+                Text("Signed in with Apple")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                HStack(spacing: 20) {
+                    Button("Sign out") {
+                        Task {
+                            await auth.signOut()
+                            dismiss()
+                        }
+                    }
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Button("Delete account…", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                }
+            }
+        case .offline:
+            VStack(spacing: 8) {
+                Text("Playing offline — no account")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                Button("Sign in") {
+                    dismiss()
+                    auth.leaveOfflineMode()
+                }
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
+        default:
+            EmptyView()
+        }
     }
 }
 

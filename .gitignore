@@ -1,5 +1,10 @@
 xcuserdata/
 DerivedData/
 build/
+build-sim/
 *.xcuserstate
 .DS_Store
+
+# Supabase credentials — never commit. Copy Words/SupabaseConfig.example.plist
+# to Words/Words/SupabaseConfig.plist and fill in real values.
+Words/Words/SupabaseConfig.plist

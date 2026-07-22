@@ -136,8 +136,29 @@ uncommitted in the working tree pending Adam's device testing.
 now never remove the dragged tile's view — its slot IS the gap, invariant 2)
 and the pass chip now always visible (dimmed at 0/6).
 
-**Next: Phase 6** — thin local profile stats. Then backend design,
-multiplayer (see PRODUCT-SPEC.md).
+- Phase 6 (per FEATURE-LIST.md; supersedes the old "Phase 6 = stats" note):
+  Supabase foundation + auth. supabase-swift 2.49.0 via SPM (pinned by
+  toolchain: Xcode 16.2/Swift 6.0.3 can't build ≥2.50). Config in gitignored
+  Words/Words/SupabaseConfig.plist (bundled via synchronized group; example
+  at Words/SupabaseConfig.example.plist; fails loudly if missing —
+  SupabaseService.swift). AuthController.swift: state machine
+  loading/signedOut/signedIn(uid)/offline, native Apple sign-in
+  (signInWithIdToken + SHA256 nonce), sign-out, delete-account RPC, server
+  profile fetch/merge/push (fresh row seeded from Apple name or local
+  profile; established server row wins). SignInView gates the app in
+  RootView; ".offline" is a TEMPORARY no-account escape hatch (persisted
+  in UserDefaults) until the Apple provider is live — remove it after.
+  Sign in with Apple entitlement wired (Words/Words.entitlements,
+  CODE_SIGN_ENTITLEMENTS) — provisioning accepted it already. Server side:
+  supabase/setup.sql (profiles + signup trigger + delete_account RPC —
+  MUST be pasted into the SQL editor once), supabase/verify.sh (end-to-end
+  server check via admin API, no Apple needed), supabase/README.md (key
+  swap + Apple provider steps). Identity model: stable ID = auth.users.id,
+  Apple = linked row in auth.identities (additive providers later).
+
+**Next:** finish Phase 6 verification (run setup.sql, swap publishable key,
+rotate secret key, then Apple flow once the membership is active). Then
+Phase 7 — data model + game sync (see FEATURE-LIST.md).
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

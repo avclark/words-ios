@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Copy this file to Words/SupabaseConfig.plist (inside the app folder,
+	     next to the .swift files) and fill in real values. The real file is
+	     gitignored. Use the PUBLISHABLE key (sb_publishable_...) from
+	     Supabase Dashboard → Settings → API Keys — never the secret key. -->
+	<key>ProjectURL</key>
+	<string>https://YOUR-PROJECT.supabase.co</string>
+	<key>APIKey</key>
+	<string>sb_publishable_YOUR-KEY</string>
+</dict>
+</plist>
