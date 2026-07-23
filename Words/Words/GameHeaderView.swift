@@ -16,6 +16,8 @@ struct GameHeaderView: View {
     var expiresAt: Date? = nil
     /// Present only when resigning makes sense (active human game).
     var onResign: (() -> Void)? = nil
+    /// Present while waiting on a human opponent (rate-limited nudge).
+    var onPing: (() -> Void)? = nil
     let onBack: () -> Void
 
     var body: some View {
@@ -56,13 +58,26 @@ struct GameHeaderView: View {
                 PlayerBadge(player: opponent, isActive: turnState == .opponent, trailing: true)
                     .padding(.trailing, onResign == nil ? 12 : 0)
 
-                if let onResign {
-                    Button(action: onResign) {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .frame(width: 26, height: 44)
-                            .contentShape(Rectangle())
+                if onResign != nil || onPing != nil {
+                    VStack(spacing: 0) {
+                        if let onPing {
+                            Button(action: onPing) {
+                                Image(systemName: "bell.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(.yellow.opacity(0.7))
+                                    .frame(width: 26, height: onResign == nil ? 44 : 22)
+                                    .contentShape(Rectangle())
+                            }
+                        }
+                        if let onResign {
+                            Button(action: onResign) {
+                                Image(systemName: "flag.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundStyle(.white.opacity(0.4))
+                                    .frame(width: 26, height: onPing == nil ? 44 : 22)
+                                    .contentShape(Rectangle())
+                            }
+                        }
                     }
                     .padding(.trailing, 6)
                 }

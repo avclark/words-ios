@@ -14,6 +14,7 @@ struct GameView: View {
     @State private var drag = DragController()
     @State private var showSwapSheet = false
     @State private var confirmingResign = false
+    @State private var pingFeedback: String?
 
     var body: some View {
         GeometryReader { geo in
@@ -34,6 +35,8 @@ struct GameView: View {
                                expiresAt: state.gameOver == nil ? state.expiresAt : nil,
                                onResign: state.opponentIsHuman && state.gameOver == nil
                                    ? { confirmingResign = true } : nil,
+                               onPing: state.opponentIsHuman && state.waitingForOpponent
+                                   ? { sendPing() } : nil,
                                onBack: { onExit?() })
 
                 Spacer(minLength: 0)
@@ -70,6 +73,12 @@ struct GameView: View {
                                  onHome: { onExit?() },
                                  onNewGame: { onNewGame?() })
                 }
+            }
+            .alert("Nudge", isPresented: .init(get: { pingFeedback != nil },
+                                               set: { if !$0 { pingFeedback = nil } })) {
+                Button("OK") { pingFeedback = nil }
+            } message: {
+                Text(pingFeedback ?? "")
             }
             .confirmationDialog("Resign this game?",
                                 isPresented: $confirmingResign,
@@ -154,6 +163,27 @@ struct GameView: View {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                     state.swapTiles(ids: ids)
                 }
+            }
+        }
+    }
+
+    /// Rate-limited server-side: one nudge per game per 6 hours.
+    private func sendPing() {
+        let name = state.opponent.profile.displayName
+        Task {
+            do {
+                let result = try await RemoteGames.ping(gameID: state.gameID)
+                switch result.status {
+                case "sent":
+                    pingFeedback = "\(name) will get a nudge that you're waiting."
+                case "cooldown":
+                    let minutes = result.retryAfterMinutes ?? 0
+                    pingFeedback = "Already nudged — you can nudge again in about \(max(1, minutes / 60))h."
+                default:
+                    pingFeedback = "It's not \(name)'s turn right now."
+                }
+            } catch {
+                pingFeedback = "Couldn't send the nudge — check your connection."
             }
         }
     }

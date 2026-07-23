@@ -26,6 +26,16 @@ tile drop, spring-back on invalid drops.
 3. **Exactly two zoom states** (1.0 and `DragController.placementZoom`).
    No intermediate zoom levels.
 4. All drag state flows through `DragController`; views stay presentation-only.
+5. **Notification callbacks hop to main explicitly.** UNUserNotificationCenter
+   delegate callbacks arrive on a background queue and their completion
+   handlers feed straight back into UIKit — implement the
+   completion-handler variants and run BOTH the body and the
+   completionHandler inside DispatchQueue.main.async. The async delegate
+   variants resume the framework thunk off-main and crash with "Call must
+   be made on main thread". Deep-link IDs from taps must stay parked in
+   NotificationsController.pendingGameID until RootView's session objects
+   exist — cold-launch taps arrive before the store does — and are
+   consumed by whichever comes last (tap or session-ready).
 
 ## Tuning knobs (the usual iteration targets)
 
@@ -84,6 +94,15 @@ Gotchas:
 - The first `devicectl` install after a while can fail with
   `Network.NWError error 60 - Operation timed out` while the tunnel warms up.
   Just retry once — the second attempt succeeds.
+- STALE-DEPLOY TRAP: if the device is offline, `xcodebuild -destination
+  'id=…'` fails BEFORE building, leaving the previous binary in
+  build/Build/Products/. A later "just install it" then ships stale code
+  while the source looks fixed (this shipped a pre-fix build once and
+  cost a debugging round trip). Before any install after a failed build,
+  verify freshness: `stat -f "%Sm" build/Build/Products/Debug-iphoneos/
+  Words.app/Words` must postdate the last source change; when the device
+  is offline, build with `-destination 'generic/platform=iOS'` so the
+  binary is current when the device returns.
 
 ## Out of scope for now
 
@@ -252,8 +271,35 @@ and the pass chip now always visible (dimmed at 0/6).
   Phase 11 chat needs realtime anyway) — 10s waiting / 30s own turn,
   poll dies with the screen. 25 unit tests.
 
-**Next:** paste phase9_robustness.sql, run verify_phase9.sh (all steps
-must pass), device-test Phase 9. Then Phase 10 — push notifications.
+- Phase 10: push notifications (supabase/phase10_notifications.sql — paste
+  AFTER phase9; edge function supabase/functions/send-push/ — deploy with
+  `supabase functions deploy send-push --no-verify-jwt` after `supabase
+  link --project-ref wdbouucicnxeoomazerx`; secrets: APNS_KEY_ID,
+  APNS_TEAM_ID (67DBW6837G), APNS_PRIVATE_KEY (p8 contents), APNS_TOPIC
+  (bundle id), APNS_ENV sandbox|production). OUTBOX PATTERN: every event
+  → notify_user() (closed type CHECK matching FEATURE-LIST exactly:
+  turn/new_game/game_over/chat/expiry_warning/ping; prefs checked
+  server-side BEFORE insert) → notification_outbox → edge function drains
+  to APNs (pg_net poke + 5-min cron sweep; claim-first, 410 deletes
+  token). NO generic send API exists — nags require changing the schema
+  constraint, by design. Turn pushes: human-vs-human only (trigger skips
+  when recipient == auth.uid(), which also covers solo AI). Ping: 1 per
+  game per 6h, only on opponent's turn (game_players.last_ping_at).
+  Badge = human games awaiting your move (server at send, client
+  recomputes on foreground). Client: PushController.swift
+  (NotificationsController.shared + AppDelegate adaptor; permission asked
+  at FIRST HUMAN GAME, never launch; tap routes via payload game_id →
+  RootView.openFromNotification; in-game banners for the visible game
+  suppressed; sign-out/delete unregisters the token via
+  auth.onWillSignOut). Prefs toggles in profile sheet (direct table RLS).
+  aps-environment=development in entitlements (provisioning accepted it).
+  verify_phase10.sh proves the whole server pipeline headlessly; simctl
+  push tests client UX without APNs; real delivery needs the p8 key +
+  device. 28 unit tests.
+
+**Next:** paste phase10_notifications.sql, Apple side (APNs p8 key, CLI
+link, secrets, deploy send-push), run verify_phase10.sh, device-test.
+Then Phase 11 — chat + emoji delight.
 
 Session learnings not captured elsewhere:
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",

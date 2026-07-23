@@ -37,7 +37,7 @@ purge_stale_test_users() {
     | py '
 import json, sys, re
 users = json.load(sys.stdin).get("users") or []
-pat = re.compile(r"^(p7[ab]|p8[abc]|p9[ab]|dbg-[ab]|verify|smoke-test)-.*@example\.com$")
+pat = re.compile(r"^(p7[ab]|p8[abc]|p9[ab]|p10[ab]|dbg-[ab]|verify|smoke-test)-.*@example\.com$")
 for u in users:
     if pat.match(u.get("email") or ""): print(u["id"])' \
     | while read -r id; do

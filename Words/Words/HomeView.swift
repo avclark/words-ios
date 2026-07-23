@@ -240,6 +240,7 @@ private struct ProfileEditorSheet: View {
     let auth: AuthController
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingDelete = false
+    @State private var prefs: RemoteGames.NotificationPrefs?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -271,11 +272,20 @@ private struct ProfileEditorSheet: View {
 
             Divider().overlay(.white.opacity(0.15))
 
+            notificationSection
+
+            Divider().overlay(.white.opacity(0.15))
+
             accountSection
         }
         .padding(24)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationBackground(HomeView.background)
+        .task {
+            if let userID = auth.signedInUserID {
+                prefs = try? await RemoteGames.fetchNotificationPrefs(userID: userID)
+            }
+        }
         .alert("Delete your account?", isPresented: $confirmingDelete) {
             Button("Delete account", role: .destructive) {
                 Task {
@@ -286,6 +296,41 @@ private struct ProfileEditorSheet: View {
         } message: {
             Text("This permanently deletes your account and profile from the server. Games saved on this device stay on this device.")
         }
+    }
+
+    /// Per-type push toggles, honored server-side (a disabled type is never
+    /// queued, let alone sent). The list is FEATURE-LIST's exact events —
+    /// there is nothing else to toggle because nothing else is ever sent.
+    @ViewBuilder
+    private var notificationSection: some View {
+        if prefs != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("NOTIFICATIONS")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .kerning(1)
+                    .foregroundStyle(.white.opacity(0.4))
+                prefToggle("Your turn", \.turn)
+                prefToggle("New games", \.newGame)
+                prefToggle("Game over", \.gameOver)
+                prefToggle("Expiry warnings", \.expiryWarning)
+                prefToggle("Nudges from opponents", \.ping)
+                prefToggle("Chat messages", \.chat)
+            }
+        }
+    }
+
+    private func prefToggle(_ label: String,
+                            _ keyPath: WritableKeyPath<RemoteGames.NotificationPrefs, Bool>) -> some View {
+        Toggle(label, isOn: Binding(
+            get: { prefs?[keyPath: keyPath] ?? true },
+            set: { newValue in
+                prefs?[keyPath: keyPath] = newValue
+                if let prefs {
+                    Task { try? await RemoteGames.saveNotificationPrefs(prefs) }
+                }
+            }))
+            .font(.system(size: 13, design: .rounded))
+            .tint(.yellow)
     }
 
     @ViewBuilder

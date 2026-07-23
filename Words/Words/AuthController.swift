@@ -31,6 +31,10 @@ final class AuthController {
     /// Fired after the server confirms account deletion, before local
     /// sign-out — the owner clears account-local data (game cache) here.
     var onAccountDeleted: (() -> Void)?
+    /// Fired before any sign-out (including deletion) — the owner
+    /// unregisters this device's push token so a signed-out phone
+    /// stops receiving that account's notifications.
+    var onWillSignOut: (() async -> Void)?
 
     private let client = SupabaseService.client
     /// Raw nonce for the in-flight Apple request; Apple receives its SHA-256.
@@ -112,6 +116,7 @@ final class AuthController {
     // MARK: - Sign out & account deletion
 
     func signOut() async {
+        await onWillSignOut?()
         do {
             try await client.auth.signOut()
         } catch {
@@ -127,6 +132,7 @@ final class AuthController {
     /// profile and identities follow by cascade. Games saved on this device
     /// are untouched — they're local-only until Phase 7.
     func deleteAccount() async -> Bool {
+        await onWillSignOut?()
         do {
             try await client.rpc("delete_account").execute()
             onAccountDeleted?()

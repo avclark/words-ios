@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct WordsApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -25,24 +27,63 @@ struct RootView: View {
     @State private var profilePushTask: Task<Void, Never>?
     @State private var startError: String?
     @State private var inviteMessage: String?
+    @State private var notifications = NotificationsController.shared
+    @State private var offeringPushPermission = false
+    /// True while a notification-opened game is being fetched (uncached
+    /// case). Together with pendingGameID it defines the "opening your
+    /// game" launch state — never shown on a normal launch.
+    @State private var openingNotificationGame = false
+    @State private var openFailure: String?
     @Environment(\.scenePhase) private var scenePhase
 
     private static let pendingInviteKey = "pendingInviteToken"
+    private static let pushPromptedKey = "pushPermissionPrompted"
+
+    /// A notification tap is being carried toward its game — show the
+    /// dedicated launch state instead of flashing the lobby.
+    private var isOpeningFromNotification: Bool {
+        notifications.pendingGameID != nil || openingNotificationGame
+    }
 
     var body: some View {
         Group {
             switch auth.state {
             case .loading:
-                loadingScreen
+                if isOpeningFromNotification {
+                    OpeningGameView()
+                } else {
+                    loadingScreen
+                }
             case .signedOut:
                 SignInView(auth: auth)
             case .signedIn:
-                if store != nil {
+                if isOpeningFromNotification {
+                    OpeningGameView()
+                } else if store != nil {
                     gameContent
                 } else {
                     loadingScreen
                 }
             }
+        }
+        // Never hang on the opening screen: if the game hasn't opened
+        // within 12s (offline session restore, dead game), fall through
+        // to the lobby with an explanation.
+        .task(id: isOpeningFromNotification) {
+            guard isOpeningFromNotification else { return }
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, isOpeningFromNotification else { return }
+            pushLog.notice("opening screen timed out — falling back to lobby")
+            notifications.pendingGameID = nil
+            openingNotificationGame = false
+            openFailure = "Couldn't load the game — check your connection and open it from the lobby."
+        }
+        .alert("Couldn't open game",
+               isPresented: .init(get: { openFailure != nil },
+                                  set: { if !$0 { openFailure = nil } })) {
+            Button("OK") { openFailure = nil }
+        } message: {
+            Text(openFailure ?? "")
         }
         .task {
             auth.onAccountDeleted = {
@@ -50,7 +91,23 @@ struct RootView: View {
                 // cache for that account too.
                 store?.wipe()
             }
+            auth.onWillSignOut = {
+                await NotificationsController.shared.unregisterCurrentToken()
+            }
+            await notifications.refreshPermissionState()
             await auth.start()
+        }
+        .onChange(of: notifications.pendingGameID) { _, gameID in
+            guard gameID != nil else { return }
+            consumePendingNotification()
+        }
+        .alert("Never miss your turn", isPresented: $offeringPushPermission) {
+            Button("Enable notifications") {
+                Task { await notifications.requestPermission() }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Get a notification when it's your move, a friend challenges you, or a game is about to expire. Real game events only — no spam, ever.")
         }
         .onChange(of: auth.signedInUserID) { _, userID in
             sessionDidChange(userID: userID)
@@ -65,7 +122,10 @@ struct RootView: View {
                 // Order matters: push our queued moves BEFORE pulling, so
                 // a pull can't roll back state that has ops still waiting.
                 sync.flushPending()
-                Task { await sync.refreshLobby() }
+                Task {
+                    await sync.refreshLobby()
+                    if let store { notifications.updateBadge(from: store.games) }
+                }
             }
         }
         .alert("Move not accepted",
@@ -218,6 +278,9 @@ struct RootView: View {
             if let pending = UserDefaults.standard.string(forKey: Self.pendingInviteKey) {
                 redeemInvite(pending)
             }
+            // A cold-launch notification tap parked its game ID before the
+            // session existed; the store is ready now.
+            consumePendingNotification()
         }
     }
 
@@ -270,9 +333,63 @@ struct RootView: View {
         game.resumeOpponentTurnIfNeeded()
     }
 
+    /// Deep-link from a notification tap. Called both when the tap lands
+    /// AND when the session becomes ready — whichever happens LAST wins:
+    /// a cold-launch tap sets pendingGameID long before the store exists,
+    /// so the ID must never be consumed until it can actually be opened.
+    /// Always pulls fresh state for the opened game — the notification
+    /// exists precisely because something changed server-side.
+    private func consumePendingNotification() {
+        guard let gameID = notifications.pendingGameID else { return }
+        guard let store, let sync else {
+            pushLog.notice("consume deferred (session not ready) game=\(gameID.uuidString, privacy: .public)")
+            return
+        }
+        pushLog.notice("consume game=\(gameID.uuidString, privacy: .public) cached=\(self.store?.games.contains { $0.id == gameID } ?? false)")
+        notifications.pendingGameID = nil
+
+        func openAndRefresh(_ saved: SavedGame) {
+            open(saved)
+            if let game = activeGame {
+                Task { await sync.refreshActiveGame(game) }
+            }
+        }
+
+        if let current = activeGame, current.gameID == gameID {
+            Task { await sync.refreshActiveGame(current) }
+        } else if let saved = store.games.first(where: { $0.id == gameID }) {
+            // Cached: opens synchronously, no interstitial needed.
+            activeGame = nil
+            openAndRefresh(saved)
+        } else {
+            // Unknown game (e.g. a brand-new challenge): keep the opening
+            // screen up while it's pulled, then land directly in it.
+            activeGame = nil
+            openingNotificationGame = true
+            Task {
+                await sync.refreshLobby()
+                if let saved = store.games.first(where: { $0.id == gameID }) {
+                    openAndRefresh(saved)
+                } else {
+                    pushLog.notice("notification game not found after refresh game=\(gameID.uuidString, privacy: .public)")
+                    openFailure = "That game couldn't be loaded — it may have ended or been removed."
+                }
+                openingNotificationGame = false
+            }
+        }
+    }
+
     private func wire(_ game: BoardState) {
         game.onAutosave = { [weak store] in store?.save($0.snapshot()) }
         sync?.attach(game)
+        notifications.visibleGameID = game.gameID
+        // The moment notifications become worth having: the player's first
+        // human game. Never on first launch.
+        if game.opponentIsHuman, notifications.permission == .notAsked,
+           !UserDefaults.standard.bool(forKey: Self.pushPromptedKey) {
+            UserDefaults.standard.set(true, forKey: Self.pushPromptedKey)
+            offeringPushPermission = true
+        }
     }
 
     private func closeActiveGame() {
@@ -280,6 +397,8 @@ struct RootView: View {
             store?.save(activeGame.snapshot())
         }
         activeGame = nil
+        notifications.visibleGameID = nil
+        if let store { notifications.updateBadge(from: store.games) }
     }
 
     private func rematch() {
@@ -323,5 +442,25 @@ struct RootView: View {
         let trimmed = p.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         p.displayName = trimmed.isEmpty ? "Player" : trimmed
         return p
+    }
+}
+
+/// Launch state for a notification-opened game: shown instead of the lobby
+/// while session restore + the game fetch finish, so the tap reads as
+/// "opening your game", not "wrong screen, then right screen".
+private struct OpeningGameView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("WORDS")
+                .font(.system(size: 30, weight: .black, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+            ProgressView()
+                .tint(.white.opacity(0.6))
+            Text("Opening your game…")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(HomeView.background.ignoresSafeArea())
     }
 }

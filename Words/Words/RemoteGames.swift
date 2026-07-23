@@ -317,6 +317,74 @@ enum RemoteGames {
             .execute()
     }
 
+    // MARK: - Notifications (Phase 10)
+
+    static func registerDeviceToken(_ token: String) async throws {
+        struct P: Encodable { let p_token: String; let p_platform: String }
+        _ = try await SupabaseService.client
+            .rpc("register_device_token", params: P(p_token: token, p_platform: "ios"))
+            .execute()
+    }
+
+    static func unregisterDeviceToken(_ token: String) async throws {
+        struct P: Encodable { let p_token: String }
+        _ = try await SupabaseService.client
+            .rpc("unregister_device_token", params: P(p_token: token))
+            .execute()
+    }
+
+    struct PingResult: Decodable {
+        let status: String   // sent | cooldown | not_their_turn
+        let retryAfterMinutes: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case retryAfterMinutes = "retry_after_minutes"
+        }
+    }
+
+    static func ping(gameID: UUID) async throws -> PingResult {
+        struct P: Encodable { let p_game_id: UUID }
+        return try await SupabaseService.client
+            .rpc("ping_opponent", params: P(p_game_id: gameID))
+            .execute().value
+    }
+
+    /// Per-type push preferences, honored SERVER-side at enqueue time.
+    struct NotificationPrefs: Codable, Equatable {
+        var userID: UUID
+        var turn = true
+        var newGame = true
+        var gameOver = true
+        var chat = true
+        var expiryWarning = true
+        var ping = true
+
+        enum CodingKeys: String, CodingKey {
+            case turn, chat, ping
+            case userID = "user_id"
+            case newGame = "new_game"
+            case gameOver = "game_over"
+            case expiryWarning = "expiry_warning"
+        }
+    }
+
+    static func fetchNotificationPrefs(userID: UUID) async throws -> NotificationPrefs {
+        let rows: [NotificationPrefs] = try await SupabaseService.client
+            .from("notification_prefs")
+            .select("user_id, turn, new_game, game_over, chat, expiry_warning, ping")
+            .eq("user_id", value: userID)
+            .execute().value
+        return rows.first ?? NotificationPrefs(userID: userID)
+    }
+
+    static func saveNotificationPrefs(_ prefs: NotificationPrefs) async throws {
+        _ = try await SupabaseService.client
+            .from("notification_prefs")
+            .upsert(prefs)
+            .execute()
+    }
+
     static func resign(gameID: UUID) async throws {
         struct P: Encodable { let p_game_id: UUID }
         _ = try await SupabaseService.client
