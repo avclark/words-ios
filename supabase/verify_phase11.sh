@@ -32,15 +32,27 @@ cleanup() {
   local status=$?
   [ "$CLEANED" = 1 ] && return 0
   CLEANED=1
+  local failed=0
   for id in "${CREATED[@]:-}"; do
     [ -n "$id" ] || continue
-    # Deletes retry: a transient 403/reset here is how users get stranded.
-    curl -sf -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
-      -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
-      || { sleep 1; curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
-           -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true; }
+    # Deletes VERIFIED by HTTP code (404 = already gone, e.g. via
+    # delete_account). A silently failed delete once stranded a profile
+    # that polluted a later run's search assertions — never claim
+    # success without checking.
+    local code="" attempt
+    for attempt in 1 2 3; do
+      code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$URL/auth/v1/admin/users/$id" \
+        -H "apikey: $KEY" -H "Authorization: Bearer $KEY") || code="000"
+      case "$code" in 200|204|404) break ;; esac
+      sleep "$attempt"
+    done
+    case "$code" in
+      200|204|404) ;;
+      *) failed=$((failed+1))
+         diag "cleanup: FAILED to delete $id (HTTP $code) — STRANDED, purge manually" ;;
+    esac
   done
-  diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
+  diag "cleanup: removed $(( ${#CREATED[@]} - failed )) of ${#CREATED[@]} test user(s)$([ "$failed" -gt 0 ] && echo " — $failed STRANDED")$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
 trap 'diag "ERR at line $LINENO: [$BASH_COMMAND] exited $? (fatal unless a retry recovers — real aborts end with a FAIL/abort line)"' ERR
 trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
@@ -183,13 +195,17 @@ COUNT=$(curl -s "$URL/rest/v1/notification_outbox?game_id=eq.$GAME&type=eq.chat&
 echo "   chat pushes queued ✓"
 
 step "5b. Search matches display name OR username (phase11c)"
+# Display name and query are PER-RUN UNIQUE: searching a fixed "jessica"
+# once matched a stranded profile from an earlier run whose cleanup
+# delete had silently failed — assertions must never depend on strangers.
+JNAME="Jessica $TS"
 curl -sf --retry 2 --retry-delay 1 -X PATCH "$URL/rest/v1/profiles?id=eq.$USER_A" \
   -H "apikey: $KEY" -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
-  -d '{"display_name":"Jessica Testclark"}' > /dev/null
+  -d "{\"display_name\":\"$JNAME\"}" > /dev/null
 HANDLE="jt$TS"
 rpc "$TOKEN_A" set_username "{\"p_username\":\"$HANDLE\"}" | grep -q '"ok"' \
   || fail "set_username didn't return ok (handle collision or invalid?)"
-rpc "$TOKEN_B" search_players '{"p_query":"jessica"}' \
+rpc "$TOKEN_B" search_players "{\"p_query\":\"jessica $TS\"}" \
   | WANT="$USER_A" HANDLE="$HANDLE" python3 -c '
 import json, sys, os
 rows = json.load(sys.stdin)
@@ -232,7 +248,7 @@ rpc_expect_error "$TOKEN_A" create_game "{\"p_opponent\":\"$USER_B\"}" "blocked\
 # must refuse for BOTH parties while a block stands.
 rpc_expect_error "$TOKEN_A" request_rematch "{\"p_game_id\":\"$GAME\"}" "rematch_unavailable"
 rpc_expect_error "$TOKEN_B" request_rematch "{\"p_game_id\":\"$GAME\"}" "rematch_unavailable"
-rpc "$TOKEN_B" search_players '{"p_query":"jessica"}' | py '
+rpc "$TOKEN_B" search_players "{\"p_query\":\"jessica $TS\"}" | py '
 import json,sys; assert json.load(sys.stdin)==[], "blocked user appears in search"
 print("   blocked pair hidden from search ✓")' || fail "search block exclusion"
 echo "   chat/requests/invites/games/REMATCH/search all sealed ✓"

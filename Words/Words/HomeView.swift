@@ -402,6 +402,9 @@ private struct ProfileEditorSheet: View {
     @State private var savedUsername: String?
     @State private var usernameFeedback: (text: String, good: Bool)?
     @State private var savingUsername = false
+    /// Phase 13: stats live in their own sheet — the profile sheet is
+    /// already carrying name, username, avatar, toggles, and account.
+    @State private var showStats = false
 
     var body: some View {
         // Scrollable so the keyboard compresses the viewport instead of
@@ -433,6 +436,25 @@ private struct ProfileEditorSheet: View {
                 }
             }
 
+            Button {
+                showStats = true
+            } label: {
+                HStack {
+                    Image(systemName: "chart.bar.fill")
+                        .font(.system(size: 13))
+                    Text("Your stats")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06)))
+            }
+
             Button("Done") { dismiss() }
                 .buttonStyle(.borderedProminent)
 
@@ -451,6 +473,9 @@ private struct ProfileEditorSheet: View {
         .scrollDismissesKeyboard(.interactively)
         .presentationDetents([.medium, .large])
         .presentationBackground(HomeView.background)
+        .sheet(isPresented: $showStats) {
+            StatsSheet()
+        }
         .task {
             await loadRemoteSections()
         }

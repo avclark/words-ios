@@ -1,16 +1,23 @@
-# Words — iOS Board Prototype
+# Words
 
-A SwiftUI prototype of a Scrabble GO-style board and tile interaction layer.
-Currently a single-screen, local-state app. The goal: make the board UX feel
-exactly like Scrabble GO before building the rest of the app around it.
+An invite-only, asynchronous multiplayer Scrabble-style iOS game
+(SwiftUI + Supabase, Sign in with Apple only), played with friends and
+family, with a permanent AI opponent. Feature-complete for v1 through
+Phase 13; remaining work is cleanup → design pass (14) → ship (15).
+See PRODUCT-SPEC.md / FEATURE-LIST.md for scope, and **"Current status"
+below — start at the COLD-START TL;DR** for where things stand and what
+to verify before doing anything.
 
-## Current state
+## Current state (board UX layer)
 
-Working: drag from rack (translucent tile under finger), drop-cell highlight,
-haptics, drag/tap placed tiles to move or return them, rack reorder with gap
-animation, blank-tile letter picker, live score chip (cross-words + premiums),
-two-state zoom (1.0 / 1.7x) with pinch toggle, pan-while-zoomed, auto-zoom on
-tile drop, spring-back on invalid drops.
+The original interaction goal — board UX that feels like Scrabble GO —
+is met and stable: drag from rack (translucent tile under finger),
+drop-cell highlight, haptics, drag/tap placed tiles to move or return
+them, rack reorder with gap animation, blank-tile letter picker, live
+score chip (cross-words + premiums), two-state zoom (1.0 / 1.7x) with
+pinch toggle, pan-while-zoomed, auto-zoom on tile drop, spring-back on
+invalid drops. Everything above it (multiplayer, chat, hints, review,
+stats) is layered per the phase history in Current status.
 
 ## Architecture invariants — do not break these
 
@@ -157,6 +164,51 @@ previous React Native version and may be reconnected later.
 
 Never create commits. The user commits manually. You may edit files and stage changes, but do not run git commit.
 ## Current status (end of session, 2026-07-24)
+
+**COLD-START TL;DR — read this first in a fresh session.**
+
+**Built: Phases 0–13 (with sub-phases through 13c). The app is
+FEATURE-COMPLETE for v1**: local game + AI, Supabase async multiplayer,
+friends/invites/usernames, push notifications, chat + emoji takeovers +
+block/report, hints + post-game review + tap-to-define, stats +
+friends-only leaderboard + head-to-head. Remaining: a cleanup pass,
+Phase 14 (design pass — every screen deliberately plain until then),
+Phase 15 (ship: TestFlight, App Store assets, privacy policy, swap
+custom-scheme invite links for universal links).
+
+State a fresh session must verify, not assume:
+- **SQL paste ledger** (Adam pastes in the Dashboard; the server is the
+  truth): everything through phase13b_stats_endings.sql is pasted and
+  verified. phase13c_stats_split.sql was written this session and NOT
+  yet confirmed pasted — verify_phase13.sh answers this: red at exactly
+  one assertion (KeyError 'ai' in step 2) = not pasted; fully green =
+  pasted. Never edit an applied SQL file; new versioned files only.
+- **Phone**: has the current client (Phase 13c build, 2026-07-24
+  ~14:25, includes optional-'ai' tolerance so it works either way).
+  Adam's DEVICE CHECKLISTS for Phases 12 and 13 are both outstanding.
+- **Verify harness**: run supabase/check_inline_python.py before AND
+  after touching any verify script (python-in-shell is LITERALS ONLY —
+  data via env/argv/stdin; see HARNESS RULE below). All 8 scripts +
+  checker were green at session end except the expected phase13 'ai'
+  red. SUPABASE_SECRET_KEY needs `source ~/.zshrc` (non-interactive
+  shells don't load it).
+- **Environment weather**: the Supabase auth gateway has been
+  intermittently failing on the SERVICE key (curl exit 56 resets and
+  bad_jwt/"unrecognized JWT kid" 403s — their side, not ours). Every
+  script retries and cleanup now verifies deletes by HTTP code and
+  reports STRANDED users loudly. Treat a single 56/403-that-recovers
+  as weather; repeated failures as real.
+- **OPEN BUG (do not fix without a log capture)**: blank-sheet-on-
+  present — see Known rough edges. Reproducible on demand on the
+  review sheet; breadcrumbs armed in categories "review" and "chat";
+  the discrimination matrix is written down. Three chat-sheet fixes
+  already shipped against wrong theories — the next step is READING A
+  CAPTURE, not another theory.
+- Never commit — Adam commits. Deploys: verify binary freshness (stat
+  the binary, `find Words -name "*.swift" -newer …`) before claiming
+  anything is on the phone.
+
+Full phase-by-phase history follows.
 
 **Completed: Phases 0–5** of the local single-player build (per PRODUCT-SPEC.md
 build order). The game is playable end to end on device; Phase 5 changes are
@@ -520,14 +572,85 @@ and the pass chip now always visible (dimmed at 0/6).
     snapshot round trip, carryLocalOnly, definitions direct/inflected/
     stems, committedWords).
 
-**Next:** 11e + 11f are PASTED and verified (verify_phase11 fully green
-this session, 10b included). Paste supabase/phase12_review.sql, run
-verify_phase12.sh (fails cleanly at step 1 pre-paste), then device-test
-Phase 12 (checklist in session notes). Phase 12 build deployed to the
-phone this session (binary 2026-07-24 00:25, freshness verified,
-definitions.tsv confirmed in bundle); the client degrades gracefully if
-the SQL isn't pasted yet (ack RPC swallowed, review shows a retryable
-error, result_seen nil → nothing archives).
+- Phase 13: stats + friends-only leaderboard + head-to-head — LAST
+  feature phase; app is feature-complete for v1 after this
+  (supabase/phase13_stats.sql — paste AFTER phase12_review.sql).
+  - DESIGN DECISION — ON DEMAND, not incremental: no stats table; three
+    SECURITY DEFINER RPCs (fetch_stats(p_user default null=self),
+    fetch_leaderboard, fetch_head_to_head) aggregate games/game_players/
+    moves at query time via internal stats_for() (EXECUTE revoked from
+    clients; verify step 9 proves it). Rationale: trivial scale, zero
+    drift, zero backfill, and no "every game-end writer must also
+    update stats" sweep (the request_rematch-bypass bug class).
+    Archived (result_seen) and hidden (hidden_at) games count — the
+    aggregation never reads those columns (verify step 7).
+  - SEMANTICS: every TERMINAL status counts, enumerated explicitly —
+    'finished' (play-out + six-pass via finish_game), 'resigned'
+    (resign_game, block-resign, departed-opponent forfeit), 'expired'
+    (phase9 job). Phase13b fix: the first cut filtered status='finished'
+    only, so resignations/expiry/departed counted NOTHING (caught by
+    verify step 1; phase13b_stats_endings.sql recreates stats_for +
+    fetch_head_to_head — leaderboard shares stats_for). winner_seat is
+    set on every terminal path, so attribution needed no fix; null =
+    tie (ties excluded from win rate); 'human' subset = other seat not
+    local_ai ('departed' counts — it was a human game); best word = my
+    top client_score play (client-computed, same number history shows).
+    verify_phase13 step 1 is now an ENDING ZOO: one game per terminal
+    path (play-out, six-pass tie, resignation, expiry forfeit, departed
+    opponent) with statuses and winners asserted outright, then the
+    stats/H2H/leaderboard ledgers checked against all five.
+  - PRIVACY: no new table → no new row policies; existing table RLS
+    unchanged; the gate lives in assert_stats_visible (self, else
+    accepted friendship AND both-direction block check — defense in
+    depth). Stranger and blocked get the SAME 'not_friends' (no
+    block-state leak).
+  - LEADERBOARD METRIC (decision): rank on win rate over HUMAN games,
+    floor of 5 (Leaderboard.rankingFloor in StatsViews.swift, named
+    constant); tie-breaks wins → avg score → name (fully ordered, board
+    never shuffles). Below floor: unranked, "N more games to rank",
+    sorted by progress. AI games excluded from the board (Robo-farming
+    must not move it) but included in personal stats (with vs-human
+    breakout shown). No metric switcher on purpose.
+  - CLIENT: StatsViews.swift (Leaderboard policy enum + StatsSheet +
+    HeadToHeadSheet); profile sheet grew ONE row ("Your stats" →
+    StatsSheet) instead of a section; FriendsView got a LEADERBOARD
+    section (rows tap → H2H sheet; empty state points at the invite
+    link; loading/error/empty per invariant 5) with data cached in
+    FriendsStore (leaderboard kept on refresh failure — never a silent
+    blank). Restrained styling; design pass is next.
+  - Tests: Phase13Tests.swift (ranking floor, ordering + tie-breaks,
+    unranked-by-progress, win-rate-ignores-ties, DTO decodes incl.
+    null best_word). verify_phase13.sh: own/friend stats correctness,
+    H2H symmetry + self refusal, board = me+friends exactly, stranger
+    sealed, AI-vs-human accounting, hidden-game-still-counts, block
+    seals both ways + shrinks board, internal helper sealed.
+
+  - Phase 13c (restructure): human stats are THE record (headline:
+    record/win rate/avg vs people — unqualified, matches the
+    leaderboard); AI games are PRACTICE, framed explicitly in the UI
+    and in the payload shape — stats_for's 'ai' subset carries games +
+    avg_score and deliberately NO win/loss keys (a W-L against a
+    difficulty you chose isn't a stat; verify asserts the keys are
+    absent). Bests stay opponent-agnostic (best word/best game
+    combined). Practice score-trend deferred to the design pass (needs
+    time-ordered windows + chart). PlayerStats.ai is Optional for
+    pre-paste tolerance (client derives the count, shows — for avg).
+    DECIDED, recorded in FEATURE-LIST: NO reset-stats feature ever
+    (resettable leaderboard = meaningless leaderboard; account
+    deletion is the reset). supabase/phase13c_stats_split.sql.
+
+**Next (in order):**
+1. Paste phase13c_stats_split.sql if verify_phase13.sh still shows the
+   'ai' red; re-run it for the green record.
+2. Adam's device passes: Phase 12 checklist (past games, game-over
+   rework, review, hints, tap-to-define) and Phase 13 checklist (stats
+   split, leaderboard, H2H) — both in session notes, both outstanding.
+3. Blank-sheet bug: waiting on Adam's Console capture (categories
+   "review"/"chat"); classify via the matrix, THEN fix chat+review
+   together with one mechanism-level change.
+4. Cleanup pass (Adam's call on scope), then Phase 14 design pass,
+   then Phase 15 ship (TestFlight, App Store assets, privacy policy,
+   universal links to replace words:// custom scheme).
 
 Session learnings not captured elsewhere:
 - HARNESS RULE (fourth harness failure — this must be the last): shell
@@ -549,11 +672,29 @@ Session learnings not captured elsewhere:
   Python; don't use it as checker bait.
 - verify.sh's user creation now retries like make_user (curl exit 56 =
   transient auth-gateway reset; it reproduced twice in one session and
-  succeeds on retry). Related cosmetic wart: the ERR trap prints "ABORT
+  succeeds on retry). Related cosmetic wart: the ERR trap prints "ERR
   at line N" diags for curl failures that are HANDLED by retry loops
   (`|| rc=$?` still triggers the trap under set -E before the handler
-  runs). If a script prints ABORT but keeps going and passes, that was
+  runs). If a script prints ERR but keeps going and passes, that was
   a survived retry, not a failure.
+- AUTH-GATEWAY WEATHER, diagnosed: the flake family (curl exit 56,
+  sporadic 403s on admin calls) is the gateway intermittently failing
+  to verify the SERVICE key's JWT — the 403 body says bad_jwt /
+  "unrecognized JWT kid". Same request succeeds seconds later. Rule:
+  retry-with-verification everywhere (done); when a security-ish check
+  fails once, confirm the failure is repeatable before believing it
+  (a "user still exists" 403 was a deleted user + gateway lie).
+- PER-RUN-UNIQUE TEST DATA is a hard rule, learned twice now: a
+  cleanup delete silently failed (gateway 403), stranding a "Jessica
+  Testclark" profile; the NEXT run's blocked-pair search assertion
+  found the stranger and failed as if block-exclusion had regressed.
+  Fixes: (1) any searchable fixture data embeds $TS (name AND query);
+  (2) assertions must never depend on the ABSENCE of strangers;
+  (3) cleanup now verifies every delete by HTTP code (404 = already
+  gone counts as success — delete_account'd users) and prints
+  "STRANDED, purge manually" instead of claiming success. When a
+  previously-green verify step fails right after unrelated changes,
+  suspect test-data pollution before product regression.
 - FALSE-ALARM TRAP (cost a security scare): a Supabase request with an
   empty/absent Bearer token authenticates as the `apikey` HEADER — in the
   verify scripts that's the SECRET key = service_role = RLS bypassed. A

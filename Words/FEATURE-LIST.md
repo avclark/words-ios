@@ -156,10 +156,41 @@ player asked to know about.
 - Per-type toggles in settings
 
 ### Stats & leaderboard
-- Profile stats: games played, won, lost, win rate, average score, best word,
-  best game score
-- **Friends-only leaderboard** (no global rankings, no strangers)
-- Head-to-head record when viewing a friend
+- Profile stats (built, Phase 13; restructured 13c): HUMAN stats are the
+  headline — record, win rate, average score against people is the
+  competitive identity and the only "my record" number shown. AI games
+  are PRACTICE, visibly framed as such: games played + average score
+  only, deliberately NO win-loss (a W-L against an opponent whose
+  difficulty you choose isn't a stat — the server payload doesn't even
+  carry the keys). Opponent-agnostic bests stay combined: best word and
+  best game count whoever you played. (A practice score-trend "am I
+  improving?" signal was considered and deferred to the design pass —
+  it needs time-ordered windows and a chart treatment.)
+- Underlying numbers: computed ON DEMAND server-side from completed games —
+  every terminal state, explicitly enumerated: normal play-out and
+  six-pass endings ('finished'), resignations incl. block-resigns and
+  departed-opponent forfeits ('resigned'), and expiry forfeits
+  ('expired'). (No stats table: nothing to drift, nothing to backfill,
+  and archived or lobby-hidden games count automatically.) Readable by self and
+  accepted friends only, enforced in the RPCs — strangers and blocked
+  users get the same refusal, so no block-state leak.
+- **Friends-only leaderboard** (built, Phase 13; no global rankings, no
+  strangers): me + accepted friends. Ranked by WIN RATE OVER HUMAN GAMES
+  with a 5-game floor (Leaderboard.rankingFloor) — wins alone rewards
+  volume, raw rate lets 1-0 squat on top; the floor fixes that. Ties
+  break by wins, then avg score. Below the floor you're listed unranked
+  with "N more games to rank". AI games never move the board (personal
+  stats still count them). Rows show W-L, win %, avg — no metric
+  switcher (a setting for its own sake).
+- Head-to-head record when viewing a friend (built, Phase 13): tap a
+  leaderboard row → wins-losses, ties, average scores, last played.
+- **NO reset-stats feature, ever** (decided Phase 13c). A resettable
+  leaderboard is a meaningless leaderboard — any bad streak could be
+  laundered away, so nobody's record would mean anything. Account
+  deletion already provides a total reset (fresh user ID on
+  re-sign-in, confirmed in Phase 6), and losing all friends, games,
+  and history is a costly enough path that it needs no extra
+  deterrent. Do not add a reset button in a future session.
 
 ### Settings
 - Notification toggles

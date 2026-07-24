@@ -582,6 +582,122 @@ enum RemoteGames {
             .execute().value
     }
 
+    // MARK: - Stats & leaderboard (Phase 13)
+
+    /// Computed server-side on demand from finished games (archived and
+    /// hidden games included). Readable for self and accepted friends
+    /// only — the RPC enforces it; strangers and blocked users get
+    /// 'not_friends'.
+    struct PlayerStats: Decodable, Equatable {
+        struct BestWord: Decodable, Equatable {
+            let word: String
+            let score: Int
+        }
+        /// The same counters over a subset of games (human opponents).
+        struct Subset: Decodable, Equatable {
+            let games: Int
+            let wins: Int
+            let losses: Int
+            let ties: Int
+            let avgScore: Int
+
+            enum CodingKeys: String, CodingKey {
+                case games, wins, losses, ties
+                case avgScore = "avg_score"
+            }
+        }
+        /// Practice (AI) games: count and average only — deliberately no
+        /// W-L; a record against an opponent whose difficulty you choose
+        /// isn't a stat. The shape itself enforces the framing.
+        struct Practice: Decodable, Equatable {
+            let games: Int
+            let avgScore: Int
+
+            enum CodingKeys: String, CodingKey {
+                case games
+                case avgScore = "avg_score"
+            }
+        }
+        let games: Int
+        let wins: Int
+        let losses: Int
+        let ties: Int
+        let avgScore: Int
+        let bestGame: Int
+        let bestWord: BestWord?
+        /// Vs-human subset — THE record (headline stat, leaderboard input).
+        let human: Subset
+        /// Optional for tolerance while phase13c awaits pasting; the UI
+        /// derives the practice count from games - human.games when nil.
+        let ai: Practice?
+
+        enum CodingKeys: String, CodingKey {
+            case games, wins, losses, ties, human, ai
+            case avgScore = "avg_score"
+            case bestGame = "best_game"
+            case bestWord = "best_word"
+        }
+    }
+
+    /// nil = my own stats; a friend's UUID otherwise.
+    static func fetchStats(of user: UUID? = nil) async throws -> PlayerStats {
+        struct P: Encodable { let p_user: UUID? }
+        return try await SupabaseService.client
+            .rpc("fetch_stats", params: P(p_user: user))
+            .execute().value
+    }
+
+    struct LeaderboardEntry: Decodable, Identifiable, Equatable {
+        let userID: UUID
+        let displayName: String?
+        let avatar: String?
+        let username: String?
+        let me: Bool
+        let stats: PlayerStats
+
+        var id: UUID { userID }
+
+        enum CodingKeys: String, CodingKey {
+            case avatar, username, me, stats
+            case userID = "user_id"
+            case displayName = "display_name"
+        }
+    }
+
+    static func fetchLeaderboard() async throws -> [LeaderboardEntry] {
+        try await SupabaseService.client
+            .rpc("fetch_leaderboard")
+            .execute().value
+    }
+
+    struct HeadToHead: Decodable, Equatable {
+        let games: Int
+        let myWins: Int
+        let theirWins: Int
+        let ties: Int
+        let myAvg: Int
+        let theirAvg: Int
+        let lastPlayed: String?
+
+        enum CodingKeys: String, CodingKey {
+            case games, ties
+            case myWins = "my_wins"
+            case theirWins = "their_wins"
+            case myAvg = "my_avg"
+            case theirAvg = "their_avg"
+            case lastPlayed = "last_played"
+        }
+
+        var lastPlayedDate: Date? { RemoteGames.parseTimestamp(lastPlayed) }
+    }
+
+    static func fetchHeadToHead(with user: UUID) async throws -> HeadToHead {
+        struct P: Encodable { let p_user: UUID }
+        return try await SupabaseService.client
+            .rpc("fetch_head_to_head", params: P(p_user: user))
+            .execute().value
+    }
+
     /// Remove a game from MY lobby: per-seat hide for human games (the
     /// opponent's copy is untouched), hard delete for solo games.
     /// Active human games refuse with 'resign_first'.

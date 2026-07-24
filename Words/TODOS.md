@@ -11,3 +11,5 @@
 
 - highlight UI needs improvement
 - also, we we should have three levels instead of two (red/green): Red for best word available, yellow for second best word, green for the rest. (or whatever colors make the most sense).
+
+- in the review, let's add a definition of the best word played (for example: garrets - see screenshot)
