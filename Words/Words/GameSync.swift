@@ -522,6 +522,7 @@ final class GameSync {
             localSeat: localSeat,
             opponentIsHuman: opponentIsHuman,
             expiresAt: opponentIsHuman ? dto.expiresDate : nil,
+            unreadChat: dto.unreadChat,
             committed: RemoteGames.committed(fromBoard: dto.board ?? [:]),
             placed: [:],
             pendingBlank: nil,

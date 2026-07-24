@@ -18,16 +18,36 @@ py()   { python3 -c "$1"; }
 # Every user this run creates is deleted on exit — success OR failure —
 # so a failed run never strands test users (deleting a user cascades away
 # its games via the cleanup trigger).
+# Robust teardown + loud death. History: a piped invocation once SIGPIPEd
+# a script mid-run — bash dies on untrapped fatal signals WITHOUT running
+# the EXIT trap, so it aborted silently AND stranded its test users. Now:
+# every abort reports the failing line/command to stderr and to
+# /tmp/words-verify.log (stdout may be the thing that died), cleanup runs
+# on signals too, and ERR reporting reaches inside functions (set -E).
+set -E
 CREATED=()
+CLEANED=0
+diag() {
+  printf '%s\n' "$*" >&2 || true
+  printf '%s %s: %s\n' "$(date '+%H:%M:%S')" "$(basename "$0")" "$*" \
+    >> /tmp/words-verify.log 2>/dev/null || true
+}
 cleanup() {
   local status=$?
+  [ "$CLEANED" = 1 ] && return 0
+  CLEANED=1
   for id in "${CREATED[@]:-}"; do
-    [ -n "$id" ] && curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
-      -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true
+    [ -n "$id" ] || continue
+    # Deletes retry: a transient 403/reset here is how users get stranded.
+    curl -sf -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
+      -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+      || { sleep 1; curl -s -o /dev/null -X DELETE "$URL/auth/v1/admin/users/$id" \
+           -H "apikey: $KEY" -H "Authorization: Bearer $KEY" || true; }
   done
-  printf '\ncleanup: removed %d test user(s)%s\n' "${#CREATED[@]}" \
-    "$([ $status -ne 0 ] && echo ' (after failure)')"
+  diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
+trap 'diag "ABORT at line $LINENO: [$BASH_COMMAND] exited $?"' ERR
+trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
 trap cleanup EXIT
 
 # Sweep test users stranded by PREVIOUS failed runs (recognizable emails).
@@ -37,7 +57,7 @@ purge_stale_test_users() {
     | py '
 import json, sys, re
 users = json.load(sys.stdin).get("users") or []
-pat = re.compile(r"^(p7[ab]|p8[abc]|p9[ab]|p10[ab]|dbg-[ab]|verify|smoke-test)-.*@example\.com$")
+pat = re.compile(r"^(p7[ab]|p8[abc]|p9[ab]|p10[ab]|p11[abc]|dbg-[ab]|verify|smoke-test)-.*@example\.com$")
 for u in users:
     if pat.match(u.get("email") or ""): print(u["id"])' \
     | while read -r id; do
@@ -49,20 +69,64 @@ for u in users:
 step "Purging test users stranded by earlier runs"
 purge_stale_test_users
 
+jwt_sub() {  # user id from a JWT access token (never tracebacks)
+  python3 -c '
+import base64, json, sys
+try:
+    p = sys.argv[1].split(".")[1]
+    p += "=" * (-len(p) % 4)
+    print(json.loads(base64.urlsafe_b64decode(p)).get("sub", ""))
+except Exception:
+    pass
+' "$1"
+}
+
 make_user() {  # $1 = email; echoes "user_id access_token"
-  local id token
-  id=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
-    -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-    -d "{\"email\":\"$1\",\"password\":\"pw-$TS\",\"email_confirm\":true}" \
-    | py 'import json,sys; print(json.load(sys.stdin)["id"])')
-  token=$(curl -sf -X POST "$URL/auth/v1/token?grant_type=password" \
-    -H "apikey: $KEY" -H "Content-Type: application/json" \
-    -d "{\"email\":\"$1\",\"password\":\"pw-$TS\"}" \
-    | py 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+  # Retries transient failures with per-attempt diagnostics (curl exit
+  # codes visible — suppressed stderr once hid the real cause). A create
+  # whose response is lost cannot strand a user: the id is recovered
+  # from the sign-in JWT, so cleanup always knows about it.
+  local id="" token="" attempt rc out
+  for attempt in 1 2 3; do
+    rc=0
+    out=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
+      -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+      -d "{\"email\":\"$1\",\"password\":\"pw-$TS\",\"email_confirm\":true}") || rc=$?
+    id=$(printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("id", ""))
+except Exception:
+    pass
+')
+    [ -n "$id" ] && break
+    diag "make_user: create attempt $attempt for $1 failed (curl exit $rc)"
+    sleep "$attempt"
+  done
+  for attempt in 1 2 3; do
+    rc=0
+    out=$(curl -sf -X POST "$URL/auth/v1/token?grant_type=password" \
+      -H "apikey: $KEY" -H "Content-Type: application/json" \
+      -d "{\"email\":\"$1\",\"password\":\"pw-$TS\"}") || rc=$?
+    token=$(printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("access_token", ""))
+except Exception:
+    pass
+')
+    [ -n "$token" ] && break
+    diag "make_user: sign-in attempt $attempt for $1 failed (curl exit $rc)"
+    sleep "$attempt"
+  done
+  [ -n "$token" ] || { diag "make_user: could not sign in $1 — aborting"; exit 1; }
+  [ -n "$id" ] || id=$(jwt_sub "$token")
+  [ -n "$id" ] || { diag "make_user: no user id for $1 — aborting"; exit 1; }
   echo "$id $token"
 }
 
 rpc() {  # $1 token, $2 fn, $3 json args; echoes body, fails on HTTP error
+  [ -n "$1" ] || { diag "rpc called with EMPTY token — refusing (would escalate to service_role)"; exit 1; }
   curl -sf -X POST "$URL/rest/v1/rpc/$2" \
     -H "apikey: $KEY" -H "Authorization: Bearer $1" \
     -H "Content-Type: application/json" -d "$3"
@@ -78,8 +142,10 @@ rpc_expect_error() {  # $1 token, $2 fn, $3 args, $4 expected message fragment
 
 step "0. Create two throwaway users"
 read -r USER_A TOKEN_A <<< "$(make_user "p7a-$TS@example.com")"
+[ -n "${USER_A:-}" ] && [ -n "${TOKEN_A:-}" ] || fail "USER_A setup incomplete"
 CREATED+=("$USER_A")
 read -r USER_B TOKEN_B <<< "$(make_user "p7b-$TS@example.com")"
+[ -n "${USER_B:-}" ] && [ -n "${TOKEN_B:-}" ] || fail "USER_B setup incomplete"
 CREATED+=("$USER_B")
 echo "   A=$USER_A"
 echo "   B=$USER_B"

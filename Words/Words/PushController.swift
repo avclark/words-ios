@@ -62,6 +62,9 @@ final class NotificationsController: NSObject, UNUserNotificationCenterDelegate 
 
     /// Set when the user taps a push; RootView opens this game and clears it.
     var pendingGameID: UUID?
+    /// Set when a tapped push is a friend event; RootView opens the
+    /// friends screen and clears it.
+    var pendingFriendsOpen = false
     /// The game currently on screen — its own banners are suppressed.
     var visibleGameID: UUID?
     /// Hex token currently registered server-side (for sign-out cleanup).
@@ -160,8 +163,10 @@ final class NotificationsController: NSObject, UNUserNotificationCenterDelegate 
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let gameID = Self.gameID(fromUserInfo: response.notification.request.content.userInfo)
-        pushLog.notice("didReceive tap game=\(gameID?.uuidString ?? "nil", privacy: .public)")
+        let userInfo = response.notification.request.content.userInfo
+        let gameID = Self.gameID(fromUserInfo: userInfo)
+        let isFriendEvent = (userInfo["type"] as? String)?.hasPrefix("friend") == true
+        pushLog.notice("didReceive tap game=\(gameID?.uuidString ?? "nil", privacy: .public) friend=\(isFriendEvent)")
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 if let gameID {
@@ -169,6 +174,8 @@ final class NotificationsController: NSObject, UNUserNotificationCenterDelegate 
                     // a cold-launch tap arrives before the store exists.
                     self.pendingGameID = gameID
                     pushLog.notice("didReceive parked game=\(gameID.uuidString, privacy: .public)")
+                } else if isFriendEvent {
+                    self.pendingFriendsOpen = true
                 }
                 completionHandler()
             }

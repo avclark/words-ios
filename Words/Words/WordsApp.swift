@@ -1,4 +1,5 @@
 import SwiftUI
+import Supabase
 
 @main
 struct WordsApp: App {
@@ -34,6 +35,9 @@ struct RootView: View {
     /// game" launch state — never shown on a normal launch.
     @State private var openingNotificationGame = false
     @State private var openFailure: String?
+    /// Friends sheet visibility lives here so a friend-notification tap
+    /// can open it (HomeView presents it via binding).
+    @State private var showFriendsSheet = false
     @Environment(\.scenePhase) private var scenePhase
 
     private static let pendingInviteKey = "pendingInviteToken"
@@ -100,6 +104,12 @@ struct RootView: View {
         .onChange(of: notifications.pendingGameID) { _, gameID in
             guard gameID != nil else { return }
             consumePendingNotification()
+        }
+        .onChange(of: notifications.pendingFriendsOpen) { _, pending in
+            guard pending, store != nil else { return }
+            notifications.pendingFriendsOpen = false
+            activeGame = nil        // friends sheet lives on the lobby
+            showFriendsSheet = true
         }
         .alert("Never miss your turn", isPresented: $offeringPushPermission) {
             Button("Enable notifications") {
@@ -229,7 +239,11 @@ struct RootView: View {
             if let activeGame {
                 GameView(state: activeGame,
                          onExit: { closeActiveGame() },
-                         onNewGame: { rematch() })
+                         onNewGame: { rematch() },
+                         onServerPoke: {
+                             // Realtime says the game row changed; pull it.
+                             Task { await sync?.refreshActiveGame(activeGame) }
+                         })
                     // Fresh identity per game so GameView's local state
                     // (drag controller, sheets) resets fully.
                     .id(activeGame.gameID)
@@ -238,6 +252,7 @@ struct RootView: View {
                          store: store,
                          auth: auth,
                          friends: friends,
+                         showFriends: $showFriendsSheet,
                          onOpen: { open($0) },
                          onNewGame: { start(difficulty: $0) },
                          onChallenge: { challenge($0) })
@@ -412,6 +427,11 @@ struct RootView: View {
                     wire(fresh)
                     store.save(fresh.snapshot())
                     activeGame = fresh
+                } catch let error as PostgrestError
+                    where error.message.contains("rematch_unavailable") {
+                    // A clear, final outcome — deliberately not disclosing
+                    // that a block is the reason.
+                    startError = "A rematch isn't available for this game."
                 } catch {
                     startError = "Couldn't start the rematch — check your connection and try again."
                 }

@@ -10,6 +10,12 @@ final class FriendsStore {
     private(set) var entries: [RemoteGames.FriendDTO] = []
     private(set) var inviteToken: String?
     var searchResults: [RemoteGames.FriendDTO] = []
+    /// True when the last non-empty search legitimately matched nobody —
+    /// distinct from "no search performed" (a silent nothing is ambiguous
+    /// between "no such user" and "they never set a username").
+    private(set) var searchCameUpEmpty = false
+    /// My own username (nil = not searchable), for the status line.
+    private(set) var myUsername: String?
 
     private let selfID: UUID
 
@@ -32,6 +38,9 @@ final class FriendsStore {
         if let list = try? await RemoteGames.listFriends() {
             entries = list
         }
+        if let name = try? await RemoteGames.fetchUsername(userID: selfID) {
+            myUsername = name
+        }
     }
 
     func loadInviteLink() async {
@@ -41,8 +50,14 @@ final class FriendsStore {
     }
 
     func search(_ query: String) async {
-        searchResults = (try? await RemoteGames.searchProfiles(
-            usernamePrefix: query, excluding: selfID)) ?? []
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 2 else {
+            searchResults = []
+            searchCameUpEmpty = false
+            return
+        }
+        searchResults = (try? await RemoteGames.searchProfiles(query: trimmed)) ?? []
+        searchCameUpEmpty = searchResults.isEmpty
     }
 
     func sendRequest(to user: RemoteGames.FriendDTO) async {
@@ -72,6 +87,7 @@ struct FriendsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
+    @State private var removalCandidate: RemoteGames.FriendDTO?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -132,8 +148,8 @@ struct FriendsView: View {
                                         onChallenge(user)
                                     }
                                     Menu {
-                                        Button("Remove friend", role: .destructive) {
-                                            Task { await store.remove(user) }
+                                        Button("Remove friend…", role: .destructive) {
+                                            removalCandidate = user
                                         }
                                     } label: {
                                         Image(systemName: "ellipsis")
@@ -153,6 +169,24 @@ struct FriendsView: View {
         .task {
             await store.loadInviteLink()
             await store.refresh()
+        }
+        // The gentle rung of the ladder (unfriend < block < delete), and
+        // it says exactly what it does before doing it.
+        .confirmationDialog(
+            "Remove \(removalCandidate?.displayName ?? "friend")?",
+            isPresented: .init(get: { removalCandidate != nil },
+                               set: { if !$0 { removalCandidate = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove friend", role: .destructive) {
+                if let user = removalCandidate {
+                    removalCandidate = nil
+                    Task { await store.remove(user) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Games you're currently playing continue (with their chat), but you won't be able to start new games or rematch unless you become friends again. To cut off all contact instead, use Block from a game's chat.")
         }
     }
 
@@ -183,8 +217,8 @@ struct FriendsView: View {
     }
 
     private var searchSection: some View {
-        section("FIND BY USERNAME") {
-            TextField("username", text: $searchText)
+        section("FIND FRIENDS") {
+            TextField("name or username", text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -196,12 +230,50 @@ struct FriendsView: View {
                         await store.search(query)
                     }
                 }
+            if store.searchCameUpEmpty {
+                Text("No one found matching that.")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
             ForEach(store.searchResults) { user in
                 row(user) {
-                    smallButton("Add", prominent: true) {
-                        Task { await store.sendRequest(to: user) }
-                    }
+                    searchAction(for: user)
                 }
+            }
+            // Your own searchability, stated where search lives.
+            if let mine = store.myUsername {
+                Text("Friends can find you by your name or @\(mine).")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+            } else {
+                Text("Friends can find you by your name. A username adds an exact handle — set one from your profile if you want one.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+        }
+    }
+
+    /// Search rows are distinguishable by relationship, not just name:
+    /// same-named people differ by avatar, @username, and whether you're
+    /// already connected.
+    @ViewBuilder
+    private func searchAction(for user: RemoteGames.FriendDTO) -> some View {
+        switch user.state {
+        case "friend":
+            Text("Friends ✓")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.4))
+        case "outgoing":
+            Text("Requested")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.4))
+        case "incoming":
+            smallButton("Accept", prominent: true) {
+                Task { await store.respond(to: user, accept: true) }
+            }
+        default:
+            smallButton("Add", prominent: true) {
+                Task { await store.sendRequest(to: user) }
             }
         }
     }

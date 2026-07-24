@@ -21,6 +21,8 @@ struct SavedGame: Identifiable, Codable {
     var opponentIsHuman: Bool?
     /// Phase 9: server inactivity deadline (human games; nil = none).
     var expiresAt: Date?
+    /// Phase 11: opponent chat messages newer than my read marker.
+    var unreadChat: Int? = nil
 
     var committed: [BoardCoord: Tile]
     /// Tiles tentatively placed this turn — preserved so quitting mid-move

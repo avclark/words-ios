@@ -1,9 +1,11 @@
 # Words Notes & ToDos
 
-- Tapping a tile on the board should not recall it. It should do nothing. 
-- Tile when dragged should be bigger when board is zoomed out (approx covering a 6x6 grid). It's current size when zoomed in is right. 
-- I'm not sure of the login around when the play button is active vs not active. It's not active when a word can't be played (for example unconnected tiles on the board). But it is active when any tiles are on the board and connected. The play button should only be active when the tiles on the board represent a valid word. 
-- After Phase 5 - Now I don't have a way to set my name becuase when I open the app it goes right to the game lobby.
+- Tapping a tile on the board should not recall it. It should do nothing. (currently, tapping a tile after I've placed it on the board makes it disappear and go back to my rack. This isn't good because when trying to move tiles around on the board I keep accidentally sending them back to the rack.)
+- When dragging a tile while the board is zoomed out, the tile should be bigger (approx covering a 6x6 grid). It's current size when zoomed in is right. The only thing that needs to change is when a tile is being dragged when the board is zoomed in. 
+- I'm not sure of the logic around when the play button is active vs not active. The play button should only be active when the tiles on the board represent a valid word that can be played. If I place an unconnected tile on the board, or I place a whole word (but it's not a valid word, etc.), the play button should stay inactive. Currently it stays active and if you press it, you get an error saying "that's not a valid word" or something like that. That is actually fine behaviour, but I want the UI of the play button to stay in it's inactive/greyed out state until a playable word is actually on the board. You tell me if right move is to make the button actually inactive until there is a playable word, or keep it active, but make the UI show it as innactive and then when it's tapped the associated error message is displayed.  
+- After Phase 5 - Now I don't have a way to set my name becuase when I open the app it goes right to the game lobby. - This might have changed now. Need to try creating a new user account. In my mind the user flow should be Create new account/sign in with apple, and then the first screen you go to is a profile screen where you can set your avatar and username. However, maybe the apple ID can provide the person's name and their avatar by default, but on the profile screen a user can then change their name/avatar?
 - Rearrange buttons at the bottom of the screen to make the play button centered. Shuffle and recal on the left, swap and pass on the right. Or just a big centered play button with other options behind a menu. Need to think through this especially when we add in hints/helpers.
 - pull to refresh
 - passing should pop up a dialog to confirm, bc it's too easy to accidentally tap
+- Fuzzy search. Currently search only returns results that are exact matches
+

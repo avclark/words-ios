@@ -8,13 +8,15 @@ struct HomeView: View {
     let store: GameStore
     let auth: AuthController
     let friends: FriendsStore
+    /// Owned by RootView so a friend-notification tap can open it.
+    @Binding var showFriends: Bool
     let onOpen: (SavedGame) -> Void
     let onNewGame: (AIDifficulty) -> Void
     let onChallenge: (RemoteGames.FriendDTO) -> Void
 
     @State private var showProfileEditor = false
     @State private var showNewGameSetup = false
-    @State private var showFriends = false
+    @State private var deleteError: String?
 
     static let background = Color(red: 0.05, green: 0.07, blue: 0.13)
 
@@ -59,6 +61,31 @@ struct HomeView: View {
         .sheet(isPresented: $showFriends) {
             FriendsView(store: friends) { friend in
                 onChallenge(friend)
+            }
+        }
+        .alert("Couldn't delete game",
+               isPresented: .init(get: { deleteError != nil },
+                                  set: { if !$0 { deleteError = nil } })) {
+            Button("OK") { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    /// Server-side first (hide for human games, hard delete for solo),
+    /// local cache only after the server agrees — a local-only delete
+    /// just resurrected on the next sync.
+    private func deleteGame(_ game: SavedGame) {
+        guard game.bagCount != nil else {
+            store.delete(id: game.id)  // pre-Phase-7 local-only game
+            return
+        }
+        Task {
+            do {
+                _ = try await RemoteGames.deleteGame(id: game.id)
+                store.delete(id: game.id)
+            } catch {
+                deleteError = "The game couldn't be deleted — check your connection and try again."
             }
         }
     }
@@ -108,10 +135,15 @@ struct HomeView: View {
                 )
                 .listRowSeparator(.hidden)
                 .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) {
-                        store.delete(id: game.id)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                    // Active human games can't be deleted — that would be
+                    // silent abandonment; resign first. (Server enforces
+                    // this too via 'resign_first'.)
+                    if game.gameOver != nil || game.opponentIsHuman != true {
+                        Button(role: .destructive) {
+                            deleteGame(game)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -158,7 +190,21 @@ private struct GameRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 4) {
-                phaseChip
+                HStack(spacing: 5) {
+                    if let unread = game.unreadChat, unread > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "bubble.left.fill")
+                                .font(.system(size: 8))
+                            Text("\(unread)")
+                                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                        }
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.yellow))
+                    }
+                    phaseChip
+                }
                 Text(game.updatedAt.formatted(.relative(presentation: .named)))
                     .font(.system(size: 10, design: .rounded))
                     .foregroundStyle(.white.opacity(0.35))
@@ -241,8 +287,18 @@ private struct ProfileEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingDelete = false
     @State private var prefs: RemoteGames.NotificationPrefs?
+    @State private var prefsLoadFailed = false
+    @State private var blocked: [RemoteGames.BlockedUser] = []
+    @State private var unblockNotice: String?
+    @State private var username = ""
+    @State private var savedUsername: String?
+    @State private var usernameFeedback: (text: String, good: Bool)?
+    @State private var savingUsername = false
 
     var body: some View {
+        // Scrollable so the keyboard compresses the viewport instead of
+        // shoving fields off the top (the sheet outgrew a fixed VStack).
+        ScrollView {
         VStack(spacing: 20) {
             Text("Your profile")
                 .font(.system(size: 18, weight: .bold, design: .rounded))
@@ -252,6 +308,8 @@ private struct ProfileEditorSheet: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 220)
                 .autocorrectionDisabled()
+
+            usernameSection
 
             HStack(spacing: 10) {
                 ForEach(Avatar.humanChoices, id: \.self) { avatar in
@@ -274,17 +332,19 @@ private struct ProfileEditorSheet: View {
 
             notificationSection
 
+            blockedSection
+
             Divider().overlay(.white.opacity(0.15))
 
             accountSection
         }
         .padding(24)
+        }
+        .scrollDismissesKeyboard(.interactively)
         .presentationDetents([.medium, .large])
         .presentationBackground(HomeView.background)
         .task {
-            if let userID = auth.signedInUserID {
-                prefs = try? await RemoteGames.fetchNotificationPrefs(userID: userID)
-            }
+            await loadRemoteSections()
         }
         .alert("Delete your account?", isPresented: $confirmingDelete) {
             Button("Delete account", role: .destructive) {
@@ -298,23 +358,118 @@ private struct ProfileEditorSheet: View {
         }
     }
 
+    /// Optional search handle, distinct from the display name on purpose:
+    /// the name is what people SEE (free-form, duplicable, zero friction);
+    /// the username is how people FIND you (unique, opt-in — no username
+    /// means not searchable, which is a privacy default, not a gap).
+    private var usernameSection: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Text("@")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                TextField("username (optional)", text: $username)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .frame(maxWidth: 170)
+                    .onSubmit { saveUsername() }
+                if username.lowercased() != (savedUsername ?? "") {
+                    Button("Save") { saveUsername() }
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .disabled(savingUsername)
+                }
+            }
+            if let feedback = usernameFeedback {
+                Text(feedback.text)
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(feedback.good ? Color.green.opacity(0.8)
+                                                   : Color(red: 1, green: 0.45, blue: 0.4))
+            } else {
+                Text("Friends can find you by your name. A username is an optional exact handle on top.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+
+    private func saveUsername() {
+        let cleaned = username.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "@", with: "")
+        username = cleaned
+        savingUsername = true
+        Task {
+            defer { savingUsername = false }
+            guard let result = try? await RemoteGames.setUsername(cleaned.isEmpty ? nil : cleaned) else {
+                usernameFeedback = ("Couldn't save — check your connection.", false)
+                return
+            }
+            switch result {
+            case "ok":
+                savedUsername = cleaned
+                usernameFeedback = ("You're @\(cleaned) — friends can find you by it.", true)
+            case "cleared":
+                savedUsername = nil
+                usernameFeedback = ("Username removed — you won't appear in search.", true)
+            case "taken":
+                usernameFeedback = ("@\(cleaned) is taken — try another.", false)
+            default:
+                usernameFeedback = ("3–20 characters: a–z, 0–9, and underscores.", false)
+            }
+        }
+    }
+
+    private func loadRemoteSections() async {
+        guard let userID = auth.signedInUserID else { return }
+        prefsLoadFailed = false
+        do {
+            prefs = try await RemoteGames.fetchNotificationPrefs(userID: userID)
+        } catch {
+            // Say so — an empty section is indistinguishable from broken.
+            prefsLoadFailed = true
+        }
+        blocked = (try? await RemoteGames.listBlocked()) ?? []
+        if let existing = try? await RemoteGames.fetchUsername(userID: userID) {
+            savedUsername = existing
+            username = existing ?? ""
+        }
+    }
+
     /// Per-type push toggles, honored server-side (a disabled type is never
     /// queued, let alone sent). The list is FEATURE-LIST's exact events —
     /// there is nothing else to toggle because nothing else is ever sent.
-    @ViewBuilder
+    /// The section header ALWAYS renders with toggles, an error+retry, or
+    /// a spinner — never a silent blank (that hid a decode bug once).
     private var notificationSection: some View {
-        if prefs != nil {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("NOTIFICATIONS")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                    .kerning(1)
-                    .foregroundStyle(.white.opacity(0.4))
+        VStack(alignment: .leading, spacing: 6) {
+            Text("NOTIFICATIONS")
+                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .kerning(1)
+                .foregroundStyle(.white.opacity(0.4))
+            if prefs != nil {
                 prefToggle("Your turn", \.turn)
                 prefToggle("New games", \.newGame)
                 prefToggle("Game over", \.gameOver)
                 prefToggle("Expiry warnings", \.expiryWarning)
                 prefToggle("Nudges from opponents", \.ping)
                 prefToggle("Chat messages", \.chat)
+                prefToggle("Friend requests", \.friend)
+            } else if prefsLoadFailed {
+                HStack {
+                    Text("Couldn't load notification settings.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Button("Try again") {
+                        Task { await loadRemoteSections() }
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+            } else {
+                ProgressView()
+                    .tint(.white.opacity(0.4))
+                    .frame(maxWidth: .infinity)
             }
         }
     }
@@ -331,6 +486,47 @@ private struct ProfileEditorSheet: View {
             }))
             .font(.system(size: 13, design: .rounded))
             .tint(.yellow)
+    }
+
+    @ViewBuilder
+    private var blockedSection: some View {
+        if !blocked.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("BLOCKED PLAYERS")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .kerning(1)
+                    .foregroundStyle(.white.opacity(0.4))
+                ForEach(blocked) { user in
+                    HStack {
+                        Text(user.displayName)
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Spacer()
+                        Button("Unblock") {
+                            let name = user.displayName
+                            Task {
+                                try? await RemoteGames.unblockUser(user.userID)
+                                blocked.removeAll { $0.userID == user.userID }
+                                unblockNotice = "\(name) is unblocked. Blocking ended your friendship, so you're not friends again automatically — send a friend request or share your invite link if you want to reconnect."
+                            }
+                        }
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    }
+                }
+                // The rule, stated where the action lives — never a
+                // silent "wait, what happened?" moment.
+                Text("Unblocking doesn't re-add someone as a friend.")
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .alert("Unblocked",
+                   isPresented: .init(get: { unblockNotice != nil },
+                                      set: { if !$0 { unblockNotice = nil } })) {
+                Button("OK") { unblockNotice = nil }
+            } message: {
+                Text(unblockNotice ?? "")
+            }
+        }
     }
 
     @ViewBuilder

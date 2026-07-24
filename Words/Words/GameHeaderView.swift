@@ -18,6 +18,9 @@ struct GameHeaderView: View {
     var onResign: (() -> Void)? = nil
     /// Present while waiting on a human opponent (rate-limited nudge).
     var onPing: (() -> Void)? = nil
+    /// Present for human games: opens the chat thread.
+    var onChat: (() -> Void)? = nil
+    var chatBadge: Int = 0
     let onBack: () -> Void
 
     var body: some View {
@@ -58,28 +61,49 @@ struct GameHeaderView: View {
                 PlayerBadge(player: opponent, isActive: turnState == .opponent, trailing: true)
                     .padding(.trailing, onResign == nil ? 12 : 0)
 
-                if onResign != nil || onPing != nil {
-                    VStack(spacing: 0) {
-                        if let onPing {
-                            Button(action: onPing) {
-                                Image(systemName: "bell.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.yellow.opacity(0.7))
-                                    .frame(width: 26, height: onResign == nil ? 44 : 22)
-                                    .contentShape(Rectangle())
+                if onChat != nil || onResign != nil || onPing != nil {
+                    HStack(spacing: 2) {
+                        if let onChat {
+                            Button(action: onChat) {
+                                ZStack {
+                                    Image(systemName: "bubble.left.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.55))
+                                    if chatBadge > 0 {
+                                        Text("\(min(chatBadge, 9))")
+                                            .font(.system(size: 9, weight: .heavy, design: .rounded))
+                                            .foregroundStyle(.black)
+                                            .frame(width: 14, height: 14)
+                                            .background(Circle().fill(Color.yellow))
+                                            .offset(x: 10, y: -9)
+                                    }
+                                }
+                                .frame(width: 30, height: 44)
+                                .contentShape(Rectangle())
                             }
                         }
-                        if let onResign {
-                            Button(action: onResign) {
-                                Image(systemName: "flag.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white.opacity(0.4))
-                                    .frame(width: 26, height: onPing == nil ? 44 : 22)
-                                    .contentShape(Rectangle())
+                        VStack(spacing: 0) {
+                            if let onPing {
+                                Button(action: onPing) {
+                                    Image(systemName: "bell.fill")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.yellow.opacity(0.7))
+                                        .frame(width: 24, height: onResign == nil ? 44 : 22)
+                                        .contentShape(Rectangle())
+                                }
+                            }
+                            if let onResign {
+                                Button(action: onResign) {
+                                    Image(systemName: "flag.fill")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.4))
+                                        .frame(width: 24, height: onPing == nil ? 44 : 22)
+                                        .contentShape(Rectangle())
+                                }
                             }
                         }
                     }
-                    .padding(.trailing, 6)
+                    .padding(.trailing, 4)
                 }
             }
             .padding(.leading, 4)

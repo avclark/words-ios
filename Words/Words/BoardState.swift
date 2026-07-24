@@ -82,6 +82,9 @@ final class BoardState {
     /// Phase 9: server inactivity deadline (human games only). Reset by
     /// every move; shown in the UI so expiry is never a surprise.
     private(set) var expiresAt: Date?
+    /// Phase 11: live mirror of the unread-chat badge, kept by the chat
+    /// layer so autosave snapshots don't clobber the lobby's count.
+    var unreadChat: Int = 0
     /// The one source for "tiles left" — server-authoritative for remote
     /// games, the local bag for legacy/local games (and unit tests).
     var bagRemaining: Int { remoteBagCount ?? bag.count }
@@ -200,6 +203,7 @@ final class BoardState {
         localSeat = saved.localSeat ?? 0
         opponentIsHuman = saved.opponentIsHuman ?? false
         expiresAt = saved.expiresAt
+        unreadChat = saved.unreadChat ?? 0
         if !opponentIsHuman { AIPlayer.warmUp() }
     }
 
@@ -224,6 +228,7 @@ final class BoardState {
                   localSeat: localSeat,
                   opponentIsHuman: opponentIsHuman,
                   expiresAt: expiresAt,
+                  unreadChat: unreadChat,
                   committed: committed,
                   placed: placed,
                   pendingBlank: pendingBlank,

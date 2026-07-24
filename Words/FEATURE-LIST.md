@@ -57,6 +57,14 @@ Platform: iPhone only. Backend: Supabase. Auth: Sign in with Apple only.
   there is nothing to match against. (Also avoids SMS cost entirely.)
 - Friend requests: send, accept, decline, remove
 - Friends list with "challenge" action
+- Relationship-ending ladder (three distinct rungs, Phase 11e/f): UNFRIEND
+  is gentle and means exactly one thing — no new games or rematches;
+  games in flight play out honorably, chat included. BLOCK stops all
+  contact now (resigns shared games, seals everything); ACCOUNT DELETION
+  additionally anonymizes the seat. Unfriending never notifies the other
+  party — it's discoverable through state, not broadcast.
+  (Chat closure is a GAME rule, not a friendship rule: chat lives and
+  dies with its game, for everyone — see Chat & delight.)
 
 ### Games & multiplayer
 - Asynchronous 1v1 games with friends (server is source of truth)
@@ -100,7 +108,10 @@ no purchases.
   extract bundled locally, or an API.
 
 ### Chat & delight (the signature feature)
-- In-game chat, iMessage-style bubbles, per game
+- In-game chat, iMessage-style bubbles, per game. Chat lives and dies
+  with its game: when the game ends, its chat closes for everyone,
+  friendship or not — a finished game is history; rematch to keep
+  talking. (Phase 11f)
 - Emoji reactions from a quick panel
 - **Screen-takeover animations**: when you open a game, a waiting emoji from
   your opponent animates dramatically — confetti, screen-filling effects,
@@ -117,6 +128,10 @@ Sent when the user has them enabled, for these events:
 - **Expiry warning** — "this game expires today if you don't play"
 - **Ping / nudge**: a player can prompt their opponent that they're waiting
   ("Adam is waiting for you to play"). Rate-limit this so it can't be spammed.
+- A friend request arrives, or your request/invite is accepted. Declines
+  never notify — there's no action to take, and silence there is kindness,
+  not a dark pattern. (Added Phase 11d; one "Friend requests" toggle
+  covers both.)
 
 **Notification discipline (a deliberate differentiator):** NEVER send
 re-engagement nags, "your friend misses you," promotional pushes, or anything

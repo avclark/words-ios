@@ -26,7 +26,26 @@ tile drop, spring-back on invalid drops.
 3. **Exactly two zoom states** (1.0 and `DragController.placementZoom`).
    No intermediate zoom levels.
 4. All drag state flows through `DragController`; views stay presentation-only.
-5. **Notification callbacks hop to main explicitly.** UNUserNotificationCenter
+5. **Async work never touches UI state carelessly** (three shipped bugs
+   came from this class: the notification-delegate thread crash, the
+   invite decode misread as a network error, the blank chat sheet).
+   Rules, in order of importance:
+   - Every completion path (network, realtime, delegate, timer) hops to
+     the MainActor BEFORE touching @Observable/@State — mark the owning
+     types @MainActor so the compiler enforces it.
+   - Never synchronously mutate state a PARENT view observes from a
+     presentation-lifecycle callback (onAppear/onChange during a sheet's
+     presentation) — the parent invalidation can collide with the
+     presentation transaction and drop the presented view's first frame
+     (blank until a system-forced commit). Use `.task` + `await
+     Task.yield()` so the mutation lands after the commit.
+   - Async views need explicit loading/error/empty states — cached
+     content immediately, spinner only while a fetch is genuinely in
+     flight, retry on failure. A conditional whose nil branch renders
+     EmptyView inside a sheet is a blank screen waiting to happen.
+   - Classify errors by kind, not by catch-all: a DecodingError surfaced
+     as "network failure" (invite bug) misleads both user and debugger.
+6. **Notification callbacks hop to main explicitly.** UNUserNotificationCenter
    delegate callbacks arrive on a background queue and their completion
    handlers feed straight back into UIKit — implement the
    completion-handler variants and run BOTH the body and the
@@ -57,6 +76,16 @@ tile drop, spring-back on invalid drops.
   (Scrabble GO pans automatically; we require manual pan)
 - Grabbing the board mid-glide reads the settled target offset, not the
   in-flight presentation value, so the board can jump slightly
+- OPEN INTERMITTENT (unreproduced since instrumentation): chat sheet can
+  present as a frozen first frame — UIKit shows it but the SwiftUI graph
+  inside never ticks (no body eval / onAppear / .task) until a
+  system-forced commit (app-switcher swipe, lock). Reproduced through
+  three fix attempts, vanished after logging-only changes → Heisenbug or
+  environmental (Low Power Mode / cold start / fast-tap suspected).
+  Diagnostics armed: category "chat" breadcrumbs log every body eval,
+  sheet-closure eval, store INIT (with ObjectIdentifier), tap, and
+  onAppear — one log capture of a recurrence classifies the mechanism
+  (see the discrimination matrix in the session around 2026-07-23).
 
 ## Build & deploy
 
@@ -297,11 +326,140 @@ and the pass chip now always visible (dimmed at 0/6).
   push tests client UX without APNs; real delivery needs the p8 key +
   device. 28 unit tests.
 
-**Next:** paste phase10_notifications.sql, Apple side (APNs p8 key, CLI
-link, secrets, deploy send-push), run verify_phase10.sh, device-test.
-Then Phase 11 — chat + emoji delight.
+- Phase 11: chat + emoji takeovers + block/report + realtime
+  (supabase/phase11_chat.sql — paste AFTER phase10; NOTE verify_phase10
+  step 8 now needs it too). Emoji reactions ARE chat messages
+  (kind='emoji') — one table/stream/notification path. Chat writes via
+  send_chat ONLY (direct-insert policy dropped; enforces participant +
+  human-opponent + not-blocked, bumps games.updated_at so lobbies
+  refresh). TWO read markers by design: server chat_reads drives unread
+  badges (moves when the chat sheet is read); a device-local takeover
+  mark (UserDefaults) records which emoji animated — takeover fires
+  exactly once, and a reinstall can't replay server-read history
+  (candidates = emoji > max(both marks)). EmojiTakeover.swift: 7 distinct
+  styles (confetti/tumble/zoomQuiver/flames/clapWave/heartbeat/
+  slamShake), all pure functions of elapsed time over TimelineView +
+  Canvas, hit-test-disabled overlay ABOVE the board — a live drag is
+  never disturbed (invariant 2); the slam SHAKES THE OVERLAY, never the
+  board. Realtime: GameChannel (Chat.swift) per open game — chat inserts
+  + games-row updates (RLS applies); Phase 9 polling stays as fallback;
+  disconnect on background, reconnect on foreground fires onReconnect →
+  full re-sync. Block (block_user): auto-resigns shared active games AS
+  BLOCKER, deletes friendship, seals chat/requests/invites/games both
+  ways (checks added to create_game/send_friend_request/redeem_invite;
+  blocked invite redemption reads as 'invalid' on purpose). Reports →
+  service-only reports table (dashboard review). Blocked-players +
+  unblock in profile sheet. 33 unit tests.
+
+- Phase 11b: rematch block-bypass fix + readable reports
+  (supabase/phase11b_block_rematch.sql — paste AFTER phase11).
+  request_rematch (Phase 9 vintage) was the ONE game-creation path the
+  Phase 11 block sweep missed — blocked players could rematch a resigned
+  game into a fresh playable one. Now raises 'rematch_unavailable'
+  (client shows "A rematch isn't available for this game." — clear
+  outcome, block not disclosed, same stance as invites→'invalid').
+  Full audit recorded in the SQL header: every other creation path was
+  already sealed; submit_move/ping are transitively safe (blocks resign
+  all shared active games). LESSON: when adding a cross-cutting check,
+  grep EVERY function that inserts into the guarded table — the sweep
+  updated the functions being replaced that phase and missed one from an
+  earlier phase. reports_readable view: reports joined to names +
+  message text, service_role only, for at-a-glance Table Editor review.
+  verify_phase11 now covers rematch-under-block (both directions),
+  post-unblock rematch restoration, and view access control.
+  PRODUCT DECISION — unblock does NOT restore friendship: blocking ends
+  the relationship (games resigned, friendship deleted); unblocking only
+  permits a new one — reconnection is a fresh request/invite, so it's
+  always a deliberate, visible act on both sides (auto-restore would pop
+  the pair back into each other's lists with no action taken, leaking
+  the block-then-unblock). Stated in the UI at the point of action:
+  caption under Blocked Players + post-unblock alert. verify_phase11
+  step 7 asserts not-friends-after-unblock both sides + deliberate
+  re-friend works.
+
+- Phase 11c: search by display name OR username
+  (supabase/phase11c_search.sql — paste AFTER phase11b). Friends search
+  for "Jessica", not @handles — search_players RPC matches either,
+  case-insensitive substring, ilike wildcards escaped, 2-char minimum +
+  10-result cap (enumeration guards), blocked pairs excluded from each
+  other's results, relationship state included so identical names are
+  distinguishable (Friends ✓ / Requested / Accept / Add). PRIVACY
+  DECISION: everyone is findable by name — acceptable because the only
+  consequence is a consent-gated friend request in an invite-only app;
+  NO hide-from-search setting (decline + block cover the harm; revisit
+  only if the app stops being invite-only). Username reframed as an
+  optional exact handle on top (profile sheet + Friends copy updated);
+  usernames claimable/clearable in profile sheet with inline
+  taken/invalid feedback (set_username RPC, no schema change).
+  verify_phase11 step 5b covers name/username/no-match/min-length/
+  wildcard-escape; step 6 covers search block-exclusion.
+
+- Phase 11d: durable deletion + friend notifications
+  (supabase/phase11d_delete_and_friends.sql — paste AFTER phase11c).
+  DELETION SEMANTICS: delete = remove from MY lobby only — human games
+  get per-seat hide (game_players.hidden_at; fetch_lobby excludes;
+  opponent untouched); solo games (AI/departed) hard-delete; ACTIVE
+  human games refuse 'resign_first' (UI hides the swipe too). The old
+  swipe-delete was cache-only and every sync resurrected the rows.
+  Client deletes server-FIRST, cache after; failure alerts.
+  FRIEND NOTIFICATIONS (spec gap closed; FEATURE-LIST updated):
+  'friend_request' on request; 'friend_accept' to the SENDER on
+  acceptance and to the INVITER on invite redemption; declines never
+  notify. Same notify_user gate + outbox constraint (expanded), one
+  'friend' prefs toggle, tap opens the friends sheet (payload type
+  friend_* → NotificationsController.pendingFriendsOpen → RootView
+  showFriendsSheet binding into HomeView). verify_phase11 steps 9/10
+  cover hide-durability/opponent-copy/resign_first/AI-hard-delete and
+  request/accept/invite-accept/toggle.
+
+- Phase 11e: unfriend semantics (supabase/phase11e_unfriend.sql — paste
+  AFTER phase11d). THE LADDER: unfriend = nothing NEW (create_game
+  not_friends; rematch counts as new → rematch_unavailable,
+  indistinguishable from block on purpose) but in-flight games play out
+  WITH chat; chat closes when they end (send_chat: friendship OR active
+  game, else 'chat_closed'); block = stop-now; deletion = +anonymize.
+  No unfriend notification — discoverable through state, not broadcast.
+  FriendsView remove now confirms with the semantics stated; ChatStore
+  surfaces send failures (chat_closed/blocked/network) inline instead of
+  silently dropping messages. ALSO FIXED: notification toggles blanked
+  on devices WITH a prefs row — fetchNotificationPrefs' select list
+  lagged the struct when 11d added `friend`, and synthesized Decodable
+  requires keys even with property defaults → decode threw → try? → nil
+  → empty section (simulator worked only because its account had NO
+  row). Now select("*") + hand-written tolerant decodeIfPresent init +
+  the section always shows toggles/error+retry/spinner, never blank.
+  verify_phase11 step 10b covers the ladder end to end.
+
+- Phase 11f: chat lives and dies with the game
+  (supabase/phase11f_chat_closure.sql — paste AFTER phase11e; BOTH 11e
+  and 11f were unpasted as of this session's end). PRODUCT DECISION:
+  a game ending closes its chat for EVERYONE, friendship irrelevant —
+  finished games are history; rematch to keep talking. (11e briefly
+  tied finished-game chat to friendship; the client's game-over overlay
+  made that clause unreachable, so the rule became the simple one.)
+  Unfriend therefore means exactly one thing: no new games/rematches.
+  Client: chat button hidden on finished games (explicit, was
+  overlay-accident); opening a finished game auto-clears unread so a
+  pre-finish message can't stick a badge forever (KNOWN TRADE-OFF: a
+  "gg" sent right before resign is only ever seen as its push banner);
+  chat_closed send error reworded for its one reachable case (game ends
+  while sheet open). verify_phase11 10b now asserts closure is a GAME
+  rule (still closed after re-friending).
+
+**Next:** paste phase11e_unfriend.sql THEN phase11f_chat_closure.sql,
+re-run verify_phase11.sh (10b must fully pass), device-retest unfriend +
+finished-game chat. Then Phase 12 — hints, post-game review, definitions.
 
 Session learnings not captured elsewhere:
+- FALSE-ALARM TRAP (cost a security scare): a Supabase request with an
+  empty/absent Bearer token authenticates as the `apikey` HEADER — in the
+  verify scripts that's the SECRET key = service_role = RLS bypassed. A
+  transient make_user failure left an empty token, and the "stranger"
+  read everything, mimicking an RLS hole that did not exist. Guards now
+  structural: make_user emits only complete credentials (internal
+  retries, aborts otherwise), every call site asserts non-empty, and
+  rpc() refuses empty tokens outright. Corollary: when a security test
+  fails, verify the test's own auth identity before believing the leak.
 - ENABLE list surprises: "john", "jow", "jus" ARE words; "za", "ki", "non",
   "nos"… check assumptions. When writing generator tests with rigged boards,
   grep enable1.txt for EVERY word/non-word assumption first — two test rigs

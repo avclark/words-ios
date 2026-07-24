@@ -74,6 +74,7 @@ enum RemoteGames {
         let bagCount: Int?
         let updatedAt: String?
         let expiresAt: String?
+        let unreadChat: Int?
         let players: [PlayerDTO]
         let moves: [MoveDTO]?
         let importLog: [String]?
@@ -89,6 +90,7 @@ enum RemoteGames {
             case bagCount = "bag_count"
             case updatedAt = "updated_at"
             case expiresAt = "expires_at"
+            case unreadChat = "unread_chat"
             case importLog = "import_log"
         }
 
@@ -262,6 +264,16 @@ enum RemoteGames {
             .execute()
     }
 
+    static func fetchUsername(userID: UUID) async throws -> String? {
+        struct Row: Decodable { let username: String? }
+        let rows: [Row] = try await SupabaseService.client
+            .from("profiles")
+            .select("username")
+            .eq("id", value: userID)
+            .execute().value
+        return rows.first?.username
+    }
+
     static func setUsername(_ username: String?) async throws -> String {
         struct P: Encodable { let p_username: String? }
         return try await SupabaseService.client
@@ -269,29 +281,14 @@ enum RemoteGames {
             .execute().value
     }
 
-    /// Username prefix search (profiles are readable by any signed-in user;
-    /// there is deliberately no email or phone search).
-    static func searchProfiles(usernamePrefix: String, excluding selfID: UUID) async throws -> [FriendDTO] {
-        struct Row: Decodable {
-            let id: UUID
-            let display_name: String
-            let avatar: String?
-            let username: String?
-        }
-        let sanitized = usernamePrefix.lowercased()
-            .filter { $0.isLetter || $0.isNumber || $0 == "_" }
-        guard !sanitized.isEmpty else { return [] }
-        let rows: [Row] = try await SupabaseService.client
-            .from("profiles")
-            .select("id, display_name, avatar, username")
-            .ilike("username", pattern: "\(sanitized)%")
-            .neq("id", value: selfID)
-            .limit(10)
+    /// Search by display name OR username (server-side: case-insensitive
+    /// substring, 2-char minimum, blocked pairs excluded, relationship
+    /// state included). Deliberately no email or phone search.
+    static func searchProfiles(query: String) async throws -> [FriendDTO] {
+        struct P: Encodable { let p_query: String }
+        return try await SupabaseService.client
+            .rpc("search_players", params: P(p_query: query))
             .execute().value
-        return rows.map {
-            FriendDTO(userID: $0.id, displayName: $0.display_name,
-                      avatar: $0.avatar, username: $0.username, state: "none")
-        }
     }
 
     static func submit(_ params: SubmitParams) async throws -> MoveResult {
@@ -314,6 +311,100 @@ enum RemoteGames {
                 p_end_reason: reason,
                 p_scores: ["0": localFinal, "1": opponentFinal],
                 p_winner_seat: winnerSeat))
+            .execute()
+    }
+
+    // MARK: - Chat & reactions (Phase 11)
+
+    struct ChatMessage: Decodable, Identifiable, Equatable {
+        let id: Int64
+        let sender: UUID
+        let kind: String        // 'text' | 'emoji'
+        let body: String
+        let createdAt: String?
+
+        var isEmoji: Bool { kind == "emoji" }
+
+        enum CodingKeys: String, CodingKey {
+            case id, sender, kind, body
+            case createdAt = "created_at"
+        }
+    }
+
+    struct ChatState: Decodable {
+        let myLastRead: Int64
+        let messages: [ChatMessage]
+
+        enum CodingKeys: String, CodingKey {
+            case messages
+            case myLastRead = "my_last_read"
+        }
+    }
+
+    static func sendChat(gameID: UUID, body: String, kind: String = "text") async throws -> Int64 {
+        struct P: Encodable { let p_game_id: UUID; let p_body: String; let p_kind: String }
+        return try await SupabaseService.client
+            .rpc("send_chat", params: P(p_game_id: gameID, p_body: body, p_kind: kind))
+            .execute().value
+    }
+
+    static func fetchChat(gameID: UUID) async throws -> ChatState {
+        struct P: Encodable { let p_game_id: UUID }
+        return try await SupabaseService.client
+            .rpc("fetch_chat", params: P(p_game_id: gameID))
+            .execute().value
+    }
+
+    static func markChatRead(gameID: UUID, messageID: Int64) async throws {
+        struct P: Encodable { let p_game_id: UUID; let p_message_id: Int64 }
+        _ = try await SupabaseService.client
+            .rpc("mark_chat_read", params: P(p_game_id: gameID, p_message_id: messageID))
+            .execute()
+    }
+
+    // MARK: - Block & report (Phase 11; App Store requirement)
+
+    static func blockUser(_ userID: UUID) async throws {
+        struct P: Encodable { let p_user: UUID }
+        _ = try await SupabaseService.client
+            .rpc("block_user", params: P(p_user: userID)).execute()
+    }
+
+    static func unblockUser(_ userID: UUID) async throws {
+        struct P: Encodable { let p_user: UUID }
+        _ = try await SupabaseService.client
+            .rpc("unblock_user", params: P(p_user: userID)).execute()
+    }
+
+    struct BlockedUser: Decodable, Identifiable {
+        let userID: UUID
+        let displayName: String
+        let avatar: String?
+
+        var id: UUID { userID }
+
+        enum CodingKeys: String, CodingKey {
+            case avatar
+            case userID = "user_id"
+            case displayName = "display_name"
+        }
+    }
+
+    static func listBlocked() async throws -> [BlockedUser] {
+        try await SupabaseService.client.rpc("list_blocked").execute().value
+    }
+
+    static func reportUser(_ userID: UUID, reason: String,
+                           gameID: UUID? = nil, messageID: Int64? = nil) async throws {
+        struct P: Encodable {
+            let p_user: UUID
+            let p_reason: String
+            let p_game_id: UUID?
+            let p_message_id: Int64?
+        }
+        _ = try await SupabaseService.client
+            .rpc("report_user", params: P(p_user: userID, p_reason: reason,
+                                          p_game_id: gameID, p_message_id: messageID))
             .execute()
     }
 
@@ -359,20 +450,43 @@ enum RemoteGames {
         var chat = true
         var expiryWarning = true
         var ping = true
+        /// Friend requests + acceptances (one toggle for both).
+        var friend = true
 
         enum CodingKeys: String, CodingKey {
-            case turn, chat, ping
+            case turn, chat, ping, friend
             case userID = "user_id"
             case newGame = "new_game"
             case gameOver = "game_over"
             case expiryWarning = "expiry_warning"
         }
+
+        init(userID: UUID) {
+            self.userID = userID
+        }
+
+        // Tolerant by hand: synthesized Decodable REQUIRES every key even
+        // when the property has a default — adding `friend` in 11d made
+        // rows without it (or a stale select list) throw, which silently
+        // blanked the settings section. Missing toggles now default on.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            userID = try container.decode(UUID.self, forKey: .userID)
+            turn = try container.decodeIfPresent(Bool.self, forKey: .turn) ?? true
+            newGame = try container.decodeIfPresent(Bool.self, forKey: .newGame) ?? true
+            gameOver = try container.decodeIfPresent(Bool.self, forKey: .gameOver) ?? true
+            chat = try container.decodeIfPresent(Bool.self, forKey: .chat) ?? true
+            expiryWarning = try container.decodeIfPresent(Bool.self, forKey: .expiryWarning) ?? true
+            ping = try container.decodeIfPresent(Bool.self, forKey: .ping) ?? true
+            friend = try container.decodeIfPresent(Bool.self, forKey: .friend) ?? true
+        }
     }
 
     static func fetchNotificationPrefs(userID: UUID) async throws -> NotificationPrefs {
+        // select * so the query can never lag the struct again.
         let rows: [NotificationPrefs] = try await SupabaseService.client
             .from("notification_prefs")
-            .select("user_id, turn, new_game, game_over, chat, expiry_warning, ping")
+            .select("*")
             .eq("user_id", value: userID)
             .execute().value
         return rows.first ?? NotificationPrefs(userID: userID)
@@ -411,6 +525,16 @@ enum RemoteGames {
         struct P: Encodable { let p_game_id: UUID }
         return try await SupabaseService.client
             .rpc("fetch_game", params: P(p_game_id: id))
+            .execute().value
+    }
+
+    /// Remove a game from MY lobby: per-seat hide for human games (the
+    /// opponent's copy is untouched), hard delete for solo games.
+    /// Active human games refuse with 'resign_first'.
+    static func deleteGame(id: UUID) async throws -> String {
+        struct P: Encodable { let p_game_id: UUID }
+        return try await SupabaseService.client
+            .rpc("delete_game", params: P(p_game_id: id))
             .execute().value
     }
 

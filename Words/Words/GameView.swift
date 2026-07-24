@@ -10,14 +10,23 @@ struct GameView: View {
     let state: BoardState
     var onExit: (() -> Void)? = nil
     var onNewGame: (() -> Void)? = nil
+    /// Realtime says the server row changed — owner re-pulls game state.
+    var onServerPoke: (() -> Void)? = nil
 
     @State private var drag = DragController()
     @State private var showSwapSheet = false
     @State private var confirmingResign = false
     @State private var pingFeedback: String?
+    @State private var chat: ChatStore?
+    @State private var channel: GameChannel?
+    @State private var showChat = false
+    @State private var takeoverEmoji: String?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        GeometryReader { geo in
+        // Diagnostic: GameView body evaluations around the chat-open window.
+        let _ = chatLog.notice("GameView BODY showChat=\(showChat) chatNil=\(chat == nil)")
+        return GeometryReader { geo in
             let metrics = BoardMetrics.fitting(width: min(geo.size.width - 8, 440))
             // Rack must never exceed screen width: an over-wide child makes the
             // VStack overflow leading-aligned, shifting the whole layout off-center.
@@ -37,6 +46,10 @@ struct GameView: View {
                                    ? { confirmingResign = true } : nil,
                                onPing: state.opponentIsHuman && state.waitingForOpponent
                                    ? { sendPing() } : nil,
+                               onChat: state.opponentIsHuman && state.gameOver == nil
+                                   ? { chatLog.notice("chat button TAPPED (chat nil=\(chat == nil))")
+                                       showChat = true } : nil,
+                               chatBadge: state.unreadChat,
                                onBack: { onExit?() })
 
                 Spacer(minLength: 0)
@@ -62,6 +75,17 @@ struct GameView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(red: 0.05, green: 0.07, blue: 0.13).ignoresSafeArea())
             .overlay(alignment: .topLeading) { floatingTile }
+            // The takeover plays ABOVE everything as a hit-test-disabled
+            // overlay: a live drag underneath continues undisturbed
+            // (invariant 2 — nothing is torn down or moved).
+            .overlay {
+                if let takeoverEmoji {
+                    EmojiTakeoverView(emoji: takeoverEmoji) {
+                        self.takeoverEmoji = nil
+                    }
+                    .zIndex(30)
+                }
+            }
             // Game over is an overlay, not a view swap: the board hierarchy
             // must never be torn down while a gesture could be live.
             .overlay {
@@ -94,6 +118,44 @@ struct GameView: View {
             }
         }
         .coordinateSpace(name: Self.spaceName)
+        .task(id: state.gameID) {
+            await setUpChat()
+        }
+        .onDisappear {
+            channel?.disconnect()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard state.opponentIsHuman else { return }
+            if phase == .active {
+                channel?.connect()
+            } else if phase == .background {
+                channel?.disconnect()
+            }
+        }
+        .sheet(isPresented: $showChat) {
+            // Diagnostic: every evaluation of the sheet CONTENT closure —
+            // did presentation evaluate it at all, and which branch?
+            let storeDesc = chat.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
+            let loadedDesc = chat.map { String($0.loaded) } ?? "-"
+            let _ = chatLog.notice("sheet CLOSURE eval chatNil=\(chat == nil) store=\(storeDesc, privacy: .public) loaded=\(loadedDesc, privacy: .public)")
+            if let chat {
+                ChatSheet(chat: chat, board: state) {
+                    // Blocked: the game was resigned server-side; leave it.
+                    onExit?()
+                }
+                .presentationDetents([.large])
+                .presentationBackground(HomeView.background)
+            } else {
+                // chat is created at game open, so this is theoretical —
+                // but a sheet must never render as pure emptiness.
+                ProgressView()
+                    .tint(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .presentationDetents([.large])
+                    .presentationBackground(HomeView.background)
+                    .onAppear { chatLog.notice("sheet NIL-BRANCH visible (fallback spinner)") }
+            }
+        }
         .sheet(isPresented: blankSheetShown) {
             BlankPickerView { letter in
                 if let coord = state.pendingBlank {
@@ -164,6 +226,72 @@ struct GameView: View {
                     state.swapTiles(ids: ids)
                 }
             }
+        }
+    }
+
+    // MARK: - Chat & realtime
+
+    private func setUpChat() async {
+        guard state.opponentIsHuman, chat == nil else { return }
+        let store = ChatStore(gameID: state.gameID,
+                              myUserID: state.localPlayer.profile.id)
+        chat = store
+
+        // ORDER MATTERS (learned from a hang): the chat fetch completes
+        // BEFORE the realtime channel is touched. The channel's subscribe
+        // shares client machinery with REST calls; connecting first wedged
+        // the fetch behind a cold-launch socket connect until a scenePhase
+        // change tore the channel down. A hung channel now costs realtime
+        // only (the poll fallback still runs) — never the chat itself.
+        chatLog.notice("setup: loading chat before channel connect")
+        let unseen = await store.load()
+        state.unreadChat = store.unreadCount
+        if let latest = unseen.last {
+            playTakeover(latest, store: store)
+        }
+        // Finished games have no reachable chat: clear unread on open so a
+        // pre-finish message can't leave a badge stuck forever.
+        if state.gameOver != nil {
+            store.markAllRead(board: state)
+        }
+
+        let gameChannel = GameChannel(gameID: state.gameID)
+        gameChannel.onChatMessage = { message in
+            handleIncoming(message, store: store)
+        }
+        gameChannel.onGameChanged = { onServerPoke?() }
+        gameChannel.onReconnect = {
+            // The dead channel may have missed anything: re-pull both.
+            onServerPoke?()
+            Task {
+                let unseen = await store.load()
+                if let latest = unseen.last, showChat == false {
+                    playTakeover(latest, store: store)
+                }
+            }
+        }
+        channel = gameChannel
+        gameChannel.connect()
+    }
+
+    private func handleIncoming(_ message: RemoteGames.ChatMessage, store: ChatStore) {
+        guard store.receive(message) else { return }
+        guard message.sender != state.localPlayer.profile.id else { return }
+        if showChat {
+            // Visible thread: ChatSheet's onChange marks it read.
+            return
+        }
+        if message.isEmoji {
+            // Live delight: play it the moment it lands.
+            playTakeover(message, store: store)
+        }
+        state.unreadChat = store.unreadCount
+    }
+
+    private func playTakeover(_ message: RemoteGames.ChatMessage, store: ChatStore) {
+        store.recordTakeoverShown(message.id)
+        withAnimation(.easeIn(duration: 0.1)) {
+            takeoverEmoji = message.body
         }
     }
 
