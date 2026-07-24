@@ -43,7 +43,7 @@ cleanup() {
   done
   diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
-trap 'diag "ABORT at line $LINENO: [$BASH_COMMAND] exited $?"' ERR
+trap 'diag "ERR at line $LINENO: [$BASH_COMMAND] exited $? (fatal unless a retry recovers — real aborts end with a FAIL/abort line)"' ERR
 trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
 trap cleanup EXIT
 
@@ -149,12 +149,12 @@ echo "   usernames ✓"
 step "3. Friend requests: send, decline, re-send, accept, mutual"
 rpc "$TOKEN_C" send_friend_request "{\"p_user\":\"$USER_A\"}" | grep -q '"sent"' || fail "send"
 rpc "$TOKEN_C" send_friend_request "{\"p_user\":\"$USER_A\"}" | grep -q '"already_pending"' || fail "dup send"
-rpc "$TOKEN_A" list_friends '{}' | py "
-import json,sys
-d=json.load(sys.stdin)
-states={e['user_id']:e['state'] for e in d}
-assert states.get('$USER_B')=='friend' and states.get('$USER_C')=='incoming', states
-print('   A sees: B friend, C incoming ✓')" || fail "A's list wrong"
+rpc "$TOKEN_A" list_friends '{}' | USER_B="$USER_B" USER_C="$USER_C" python3 -c '
+import json, sys, os
+states = {e["user_id"]: e["state"] for e in json.load(sys.stdin)}
+assert states.get(os.environ["USER_B"]) == "friend", states
+assert states.get(os.environ["USER_C"]) == "incoming", states
+print("   A sees: B friend, C incoming ✓")' || fail "A's list wrong"
 rpc "$TOKEN_A" respond_friend_request "{\"p_user\":\"$USER_C\",\"p_accept\":false}" | grep -q '"declined"' || fail "decline"
 rpc "$TOKEN_C" send_friend_request "{\"p_user\":\"$USER_A\"}" | grep -q '"sent"' || fail "re-send after decline"
 rpc "$TOKEN_A" send_friend_request "{\"p_user\":\"$USER_C\"}" | grep -q '"accepted"' || fail "mutual request should auto-accept"
@@ -195,17 +195,29 @@ step "6. Human seats enforce ownership (no AI-style delegation)"
 A_LETTER=$(rpc "$TOKEN_A" fetch_game "{\"p_game_id\":\"$GAME\"}" \
   | py 'import json,sys; r=json.load(sys.stdin)["players"][0]["rack"]; print(next(l for l in r if l!="?"))')
 rpc_expect_error "$TOKEN_B" submit_move "{\"p_game_id\":\"$GAME\",\"p_seat\":0,\"p_kind\":\"pass\"}" "not_your_seat"
-RES=$(rpc "$TOKEN_A" submit_move "{\"p_game_id\":\"$GAME\",\"p_seat\":0,\"p_kind\":\"play\",
-  \"p_placements\":[{\"row\":7,\"col\":7,\"letter\":\"$A_LETTER\",\"blank\":false}],\"p_word\":\"$A_LETTER\",\"p_client_score\":4}")
+# Payload built by a fixed python program; values cross only via argv
+# (never interpolated into python or JSON source).
+PLAY_PAYLOAD=$(python3 - "$GAME" 0 7 7 "$A_LETTER" <<'PYEOF'
+import json, sys
+game, seat, row, col, letter = sys.argv[1:6]
+print(json.dumps({
+    "p_game_id": game, "p_seat": int(seat), "p_kind": "play",
+    "p_placements": [{"row": int(row), "col": int(col),
+                      "letter": letter, "blank": False}],
+    "p_word": letter, "p_client_score": 4,
+}))
+PYEOF
+)
+RES=$(rpc "$TOKEN_A" submit_move "$PLAY_PAYLOAD")
 echo "$RES" | py 'import json,sys; d=json.load(sys.stdin); assert len(d["drawn"])==1, d' || fail "A play: $RES"
 rpc "$TOKEN_B" submit_move "{\"p_game_id\":\"$GAME\",\"p_seat\":1,\"p_kind\":\"pass\"}" > /dev/null || fail "B cannot pass own turn"
-rpc "$TOKEN_B" fetch_lobby '{}' | py "
-import json,sys
-d=json.load(sys.stdin)
-assert len(d)==1 and d[0]['game_id']=='$GAME'
-names={p['seat']: p['display_name'] for p in d[0]['players']}
+rpc "$TOKEN_B" fetch_lobby '{}' | GAME="$GAME" python3 -c '
+import json, sys, os
+d = json.load(sys.stdin)
+assert len(d) == 1 and d[0]["game_id"] == os.environ["GAME"], d
+names = {p["seat"]: p["display_name"] for p in d[0]["players"]}
 assert names[0] and names[1], names
-print('   B lobby shows the game with both names ✓')" || fail "B lobby"
+print("   B lobby shows the game with both names ✓")' || fail "B lobby"
 
 step "7. AI exception still intact: AI rack visible in AI games"
 rpc "$TOKEN_A" create_game '{"p_ai_difficulty":"easy"}' | py '

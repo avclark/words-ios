@@ -16,6 +16,7 @@ struct HomeView: View {
 
     @State private var showProfileEditor = false
     @State private var showNewGameSetup = false
+    @State private var showPastGames = false
     @State private var deleteError: String?
 
     static let background = Color(red: 0.05, green: 0.07, blue: 0.13)
@@ -27,7 +28,7 @@ struct HomeView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
-            if store.games.isEmpty {
+            if store.currentGames.isEmpty && store.pastGames.isEmpty {
                 emptyState
             } else {
                 gameList
@@ -62,6 +63,11 @@ struct HomeView: View {
             FriendsView(store: friends) { friend in
                 onChallenge(friend)
             }
+        }
+        .sheet(isPresented: $showPastGames) {
+            PastGamesView(store: store,
+                          onOpen: { showPastGames = false; onOpen($0) },
+                          onDelete: { deleteGame($0) })
         }
         .alert("Couldn't delete game",
                isPresented: .init(get: { deleteError != nil },
@@ -122,7 +128,7 @@ struct HomeView: View {
 
     private var gameList: some View {
         List {
-            ForEach(store.lobbyOrder) { game in
+            ForEach(store.currentGames) { game in
                 Button {
                     onOpen(game)
                 } label: {
@@ -146,6 +152,37 @@ struct HomeView: View {
                         }
                     }
                 }
+            }
+
+            // Finished games whose result has been SEEN live here — out
+            // of the way, never gone (Phase 12). Stats count them all.
+            if !store.pastGames.isEmpty {
+                Button {
+                    showPastGames = true
+                } label: {
+                    HStack {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white.opacity(0.5))
+                        Text("Past games")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                        Spacer()
+                        Text("\(store.pastGames.count)")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.4))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                    .padding(.vertical, 8)
+                }
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.03))
+                        .padding(.vertical, 4)
+                )
+                .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)
@@ -255,6 +292,77 @@ private struct GameRow: View {
         if remaining <= 0 { return "expiring" }
         if remaining < 86_400 { return "expires today" }
         return "expires in \(Int(remaining / 86_400))d"
+    }
+}
+
+// MARK: - Past games (Phase 12)
+
+/// The archive: finished games whose result the player has acknowledged.
+/// Everything still opens (result overlay → review → rematch) and the
+/// same swipe-delete semantics apply as in the lobby. Purely a
+/// presentation split — profile stats draw on all finished games.
+private struct PastGamesView: View {
+    let store: GameStore
+    let onOpen: (SavedGame) -> Void
+    let onDelete: (SavedGame) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("PAST GAMES")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .kerning(1.5)
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 8)
+
+            if store.pastGames.isEmpty {
+                // Deleting the last one shouldn't leave a blank sheet.
+                Text("No past games — finished games land here once you've seen the result.")
+                    .font(.system(size: 13, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .multilineTextAlignment(.center)
+                    .padding(30)
+                Spacer()
+            } else {
+                List {
+                    ForEach(store.pastGames) { game in
+                        Button {
+                            onOpen(game)
+                        } label: {
+                            GameRow(game: game)
+                        }
+                        .listRowBackground(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                                .padding(.vertical, 4)
+                        )
+                        .listRowSeparator(.hidden)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                onDelete(game)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .background(HomeView.background.ignoresSafeArea())
+        .presentationDetents([.large])
+        .presentationBackground(HomeView.background)
     }
 }
 

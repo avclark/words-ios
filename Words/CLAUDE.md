@@ -76,16 +76,30 @@ tile drop, spring-back on invalid drops.
   (Scrabble GO pans automatically; we require manual pan)
 - Grabbing the board mid-glide reads the settled target offset, not the
   in-flight presentation value, so the board can jump slightly
-- OPEN INTERMITTENT (unreproduced since instrumentation): chat sheet can
-  present as a frozen first frame — UIKit shows it but the SwiftUI graph
-  inside never ticks (no body eval / onAppear / .task) until a
-  system-forced commit (app-switcher swipe, lock). Reproduced through
-  three fix attempts, vanished after logging-only changes → Heisenbug or
-  environmental (Low Power Mode / cold start / fast-tap suspected).
-  Diagnostics armed: category "chat" breadcrumbs log every body eval,
-  sheet-closure eval, store INIT (with ObjectIdentifier), tap, and
-  onAppear — one log capture of a recurrence classifies the mechanism
-  (see the discrimination matrix in the session around 2026-07-23).
+- OPEN — BLANK SHEET ON PRESENT, now REPRODUCIBLE (2026-07-24): the
+  REVIEW sheet shows the exact chat-sheet signature on demand: tap
+  Review → blank sheet → lock the phone → content flashes in → unlock →
+  content stays. Two sheets with one signature = a general presentation
+  problem, not a ChatSheet bug. Shared pattern: content gated on an
+  optional @State object, presented by a bool flip, on GameView's
+  modifier chain; one difference the logs exploit — chat's store exists
+  long before the tap, review's engine is created IN the tap handler.
+  Diagnostics armed in BOTH categories ("chat", "review"): GameView
+  BODY eval, tap, sheet-CLOSURE eval (with nil-branch fallback+log),
+  inner BODY eval with values read, onAppear, .task START, store/engine
+  INIT + every phase transition (all with ObjectIdentifiers).
+  Discrimination matrix (capture one repro, read in order):
+    tap logged, NO closure eval, NO body/onAppear → (a) presentation
+      layer stuck before the SwiftUI graph (UIKit commit never happened);
+    closure eval logged with engineNil=true / NIL-BRANCH visible → (d)
+      nil-gated content — blank is the EmptyView/fallback branch;
+    closure eval ok, NO inner BODY eval until the lock → (b) inner view
+      graph never ticked (the chat capture looked like this);
+    BODY evals logged with correct values but screen blank → (c) render/
+      CA commit stuck — SwiftUI fine, pixels not committed.
+  DO NOT ship a fix before a capture names the row (three chat fixes
+  shipped against wrong theories). Chat + review must be fixed by the
+  same mechanism-level change.
 
 ## Build & deploy
 
@@ -142,7 +156,7 @@ previous React Native version and may be reconnected later.
 ## Git
 
 Never create commits. The user commits manually. You may edit files and stage changes, but do not run git commit.
-## Current status (end of session, 2026-07-21)
+## Current status (end of session, 2026-07-24)
 
 **Completed: Phases 0–5** of the local single-player build (per PRODUCT-SPEC.md
 build order). The game is playable end to end on device; Phase 5 changes are
@@ -446,11 +460,100 @@ and the pass chip now always visible (dimmed at 0/6).
   while sheet open). verify_phase11 10b now asserts closure is a GAME
   rule (still closed after re-friending).
 
-**Next:** paste phase11e_unfriend.sql THEN phase11f_chat_closure.sql,
-re-run verify_phase11.sh (10b must fully pass), device-retest unfriend +
-finished-game chat. Then Phase 12 — hints, post-game review, definitions.
+- Phase 12: past games, game-over rework, review, hints, definitions
+  (supabase/phase12_review.sql — paste AFTER phase11f).
+  - PAST GAMES: acknowledgment-based archival — the game-over screen
+    APPEARING marks the result seen (BoardState.markResultSeen once-only
+    → autosave + mark_result_seen RPC; game_players.result_seen_at,
+    per-seat, synced). Finished+seen = SavedGame.isArchived → out of the
+    lobby into the Past games sheet (HomeView; same GameRow, same
+    swipe-delete, tap reopens with the result overlay). Presentation
+    only; stats (Phase 13) will draw on all finished games.
+  - GAME-OVER REWORK: GameOverView gained "Review game" (onReview) which
+    dismisses the overlay (resultDismissed, per-game state) into the
+    live finished board; the action bar swaps to finishedBar
+    (Result / Review-analysis / Rematch). Board stays fully alive —
+    invariant 2 untouched, overlay only.
+  - REVIEW: move_private table (RLS zero policies) snapshots rack_before
+    on EVERY submit_move; fetch_review(game) returns all moves +
+    rack_before ONLY for the caller's seat and ONLY on finished games
+    ('game_still_active' otherwise) — mid-game rack history is a cheat
+    vector, opponent racks stay private forever. ReviewEngine
+    (@MainActor @Observable) replays moves to rebuild per-turn boards,
+    runs AIPlayer.bestMove per MY turn via Task.detached (progressive:
+    turns append live behind a progress bar; first call may pay the trie
+    build), caches JSON at App Support/Reviews/<gameID>.json (versioned;
+    finished games never change → cache never expires). Moves predating
+    the migration have no rack row → shown as un-analyzable, excluded
+    from summary math. ReviewView: summary cards (best play, biggest
+    miss, points left, avg/turn) + expandable turn rows with a Canvas
+    MiniBoardView (board-before muted, played gold, best green outline).
+  - HINTS: HintBudget.{placements,bestWord} = 5 each (BoardState.swift,
+    the named-constant requirement), HintBudget.placementSpots = 12 —
+    CHOICE MADE: top 12 DISTINCT positions (start cell + orientation,
+    best word per position; AIPlayer.topMoves), red = best, green =
+    rest. Type 2 stages via applyBestWordHint (recall → match rack
+    tiles by letter, blanks pre-assigned → placed; never commits; bails
+    WITHOUT spending if the board/rack shifted under the async compute).
+    Highlights clear on turn boundaries (play/pass/swap/opponent/
+    refresh). Compute runs Task.detached with a spinner in the hint
+    button (first hint in a HUMAN game pays the trie build). Counters
+    persist in SavedGame; GameSync.carryLocalOnly keeps them (and a
+    locally-set resultSeen) from being clobbered by server rebuilds.
+  - DEFINITIONS: bundled WordNet 3.1 ∩ ENABLE extract
+    (Words/Words/definitions.tsv, ~58k entries / 4.2MB; built by
+    scratchpad script from wordnetcode.princeton.edu — WORD\tpos. gloss
+    | pos. gloss, first sense per POS, irregulars baked in from *.exc).
+    Definitions.swift: lazy load + warmUp() at game open, suffix-strip
+    stems() for regular inflections, attribution string shown in
+    DefinitionSheet. Tap a COMMITTED tile (cell-level onTapGesture;
+    TapGesture fails on movement so pans still work; fresh-tile taps
+    still return to rack) → committedWords(through:) → sheet. Offline
+    by construction; missing entries say "valid word, no definition".
+    Amenity, not authority: Lexicon remains the only validity judge.
+  - verify_phase12.sh: ack no-op on active, review sealed while active +
+    for strangers, move_private RLS-sealed + populated (play rack ==
+    dealt rack), per-seat rack privacy both directions, lobby/fetch_game
+    result_seen flags, idempotent ack, AI-game review parity.
+  - Tests: Phase12Tests.swift (topMoves dedup/sort/cap, hint budget
+    spend/stale-bail, staged hint scores == promised, ack once-only,
+    snapshot round trip, carryLocalOnly, definitions direct/inflected/
+    stems, committedWords).
+
+**Next:** 11e + 11f are PASTED and verified (verify_phase11 fully green
+this session, 10b included). Paste supabase/phase12_review.sql, run
+verify_phase12.sh (fails cleanly at step 1 pre-paste), then device-test
+Phase 12 (checklist in session notes). Phase 12 build deployed to the
+phone this session (binary 2026-07-24 00:25, freshness verified,
+definitions.tsv confirmed in bundle); the client degrades gracefully if
+the SQL isn't pasted yet (ack RPC swallowed, review shows a retryable
+error, result_seen nil → nothing archives).
 
 Session learnings not captured elsewhere:
+- HARNESS RULE (fourth harness failure — this must be the last): shell
+  variables are NEVER interpolated into Python source in verify scripts.
+  The killer was `"$(python3 -c "…{…}")"` — macOS bash 3.2 mangles braces
+  in nested double quotes inside command substitution, so the Python
+  that RUNS differs from the Python WRITTEN; a static validator can only
+  parse the latter, which is why "all 105 blocks verified" still
+  shipped a broken block. The class is now BANNED, not linted: every
+  python source is a literal (single-quoted -c string or <<'PYEOF'
+  heredoc), data crosses only via env/argv/stdin, and JSON payloads
+  with variable data are built by fixed python programs taking argv
+  (see verify_phase12 step 3, verify_phase10 play_letter).
+  supabase/check_inline_python.py enforces this mechanically (bans
+  double-quoted sources + unquoted heredocs, ast-parses every literal —
+  exact, because literals ARE what python receives; self-tested against
+  all three historical failure shapes). RUN IT after any verify-script
+  edit, before running the script. Beware `this is not python` — valid
+  Python; don't use it as checker bait.
+- verify.sh's user creation now retries like make_user (curl exit 56 =
+  transient auth-gateway reset; it reproduced twice in one session and
+  succeeds on retry). Related cosmetic wart: the ERR trap prints "ABORT
+  at line N" diags for curl failures that are HANDLED by retry loops
+  (`|| rc=$?` still triggers the trap under set -E before the handler
+  runs). If a script prints ABORT but keeps going and passes, that was
+  a survived retry, not a failure.
 - FALSE-ALARM TRAP (cost a security scare): a Supabase request with an
   empty/absent Bearer token authenticates as the `apikey` HEADER — in the
   verify scripts that's the SECRET key = service_role = RLS bypassed. A
@@ -471,4 +574,10 @@ Session learnings not captured elsewhere:
 - Unit tests run on the iPhone 16 Pro simulator; trie build + all 7 tests
   finish in ~1s, so run them before every device deploy.
 - New .swift files are picked up automatically (synchronized project groups) —
-  no pbxproj editing needed.
+  no pbxproj editing needed. Non-source files dropped into Words/Words/
+  (definitions.tsv) become bundle resources the same way.
+- definitions.tsv is REGENERABLE: tools/build_definitions.py (run from a
+  dir containing an extracted WordNet 3.1 `dict/` from
+  wordnetcode.princeton.edu/wn3.1.dict.tar.gz) rebuilds it from ENABLE ∩
+  WordNet. Change the sense-count/format there, not by hand-editing 58k
+  lines.

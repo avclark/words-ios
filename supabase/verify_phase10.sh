@@ -43,7 +43,7 @@ cleanup() {
   done
   diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
-trap 'diag "ABORT at line $LINENO: [$BASH_COMMAND] exited $?"' ERR
+trap 'diag "ERR at line $LINENO: [$BASH_COMMAND] exited $? (fatal unless a retry recovers — real aborts end with a FAIL/abort line)"' ERR
 trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
 trap cleanup EXIT
 
@@ -116,7 +116,7 @@ outbox() {  # $1 = query string; service-role read of the outbox
 }
 
 play_letter() {  # $1 token, $2 game, $3 seat — plays first non-blank rack letter
-  local L
+  local L ROW COL PAYLOAD
   L=$(rpc "$1" fetch_game "{\"p_game_id\":\"$2\"}" \
     | python3 -c '
 import json, sys
@@ -125,9 +125,19 @@ rack = json.load(sys.stdin)["players"][seat]["rack"]
 print(next(l for l in rack if l != "?"))
 ' "$3")
   ROW=$((7 + $3)); COL=$((3 + RANDOM % 9))
-  rpc "$1" submit_move "{\"p_game_id\":\"$2\",\"p_seat\":$3,\"p_kind\":\"play\",
-    \"p_placements\":[{\"row\":$ROW,\"col\":$COL,\"letter\":\"$L\",\"blank\":false}],
-    \"p_word\":\"$L\",\"p_client_score\":2}" > /dev/null
+  # Payload built by a fixed python program; values cross only via argv.
+  PAYLOAD=$(python3 - "$2" "$3" "$ROW" "$COL" "$L" <<'PYEOF'
+import json, sys
+game, seat, row, col, letter = sys.argv[1:6]
+print(json.dumps({
+    "p_game_id": game, "p_seat": int(seat), "p_kind": "play",
+    "p_placements": [{"row": int(row), "col": int(col),
+                      "letter": letter, "blank": False}],
+    "p_word": letter, "p_client_score": 2,
+}))
+PYEOF
+)
+  rpc "$1" submit_move "$PAYLOAD" > /dev/null
 }
 
 step "0. Users, friendship, game, device token"
@@ -143,21 +153,23 @@ GAME=$(rpc "$TOKEN_A" create_game "{\"p_opponent\":\"$USER_B\"}" \
 echo "   game=$GAME, B has a (fake) device token"
 
 step "1. Challenge produced a new_game notification for B (not A)"
-outbox "game_id=eq.$GAME&type=eq.new_game&select=recipient,title,body" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_B', rows
-assert 'challenged' in rows[0]['body'], rows[0]
-print('   new_game → B only ✓')" || fail "new_game notification"
+outbox "game_id=eq.$GAME&type=eq.new_game&select=recipient,title,body" \
+  | WANT="$USER_B" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+assert "challenged" in rows[0]["body"], rows[0]
+print("   new_game -> B only ✓")' || fail "new_game notification"
 
 step "2. A plays → turn notification for B with badge"
 play_letter "$TOKEN_A" "$GAME" 0
-outbox "game_id=eq.$GAME&type=eq.turn&select=recipient,badge,body" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_B', rows
-assert rows[0]['badge']==1, ('badge', rows[0]['badge'])
-print('   turn → B, badge=1 ✓')" || fail "turn notification"
+outbox "game_id=eq.$GAME&type=eq.turn&select=recipient,badge,body" \
+  | WANT="$USER_B" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+assert rows[0]["badge"] == 1, ("badge", rows[0]["badge"])
+print("   turn -> B, badge=1 ✓")' || fail "turn notification"
 
 step "3. Server-side prefs: B disables 'turn', plays continue, no new row"
 curl -sf -X POST "$URL/rest/v1/notification_prefs" \
@@ -181,20 +193,22 @@ d=json.load(sys.stdin)
 assert d["status"]=="cooldown" and d["retry_after_minutes"]>300, d
 print("   second ping → cooldown (~6h) ✓")' || fail "ping rate limit"
 rpc "$TOKEN_B" ping_opponent "{\"p_game_id\":\"$GAME\"}" | grep -q "not_their_turn" || fail "B pinging on own turn should refuse"
-outbox "game_id=eq.$GAME&type=eq.ping&select=recipient" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_B', rows
-print('   exactly one ping row → B ✓')" || fail "ping outbox"
+outbox "game_id=eq.$GAME&type=eq.ping&select=recipient" \
+  | WANT="$USER_B" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+print("   exactly one ping row -> B ✓")' || fail "ping outbox"
 
 step "5. Resign → game_over for the opponent only"
 rpc "$TOKEN_A" resign_game "{\"p_game_id\":\"$GAME\"}" > /dev/null
-outbox "game_id=eq.$GAME&type=eq.game_over&select=recipient,body" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_B', rows
-assert 'resigned' in rows[0]['body'] and 'win' in rows[0]['body'], rows[0]
-print('   game_over → B only, correct copy ✓')" || fail "game_over notification"
+outbox "game_id=eq.$GAME&type=eq.game_over&select=recipient,body" \
+  | WANT="$USER_B" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+assert "resigned" in rows[0]["body"] and "win" in rows[0]["body"], rows[0]
+print("   game_over -> B only, correct copy ✓")' || fail "game_over notification"
 
 step "6. Expiry warning rides the Phase 9 job"
 GAME2=$(rpc "$TOKEN_A" create_game "{\"p_opponent\":\"$USER_B\"}" \
@@ -205,12 +219,13 @@ curl -sf -X PATCH "$URL/rest/v1/games?id=eq.$GAME2" \
 curl -sf -X POST "$URL/rest/v1/rpc/process_game_expiry" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" -d '{}' > /dev/null
-outbox "game_id=eq.$GAME2&type=eq.expiry_warning&select=recipient,body" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_A', rows
-assert 'expires today' in rows[0]['body'], rows[0]
-print('   expiry_warning → player on turn ✓')" || fail "expiry warning"
+outbox "game_id=eq.$GAME2&type=eq.expiry_warning&select=recipient,body" \
+  | WANT="$USER_A" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+assert "expires today" in rows[0]["body"], rows[0]
+print("   expiry_warning -> player on turn ✓")' || fail "expiry warning"
 
 step "7. Solo AI games never notify"
 AI_GAME=$(rpc "$TOKEN_A" create_game '{"p_ai_difficulty":"easy"}' \
@@ -224,12 +239,13 @@ echo "   zero rows for solo play ✓"
 step "8. Chat plumbing ready (Phase 11)"
 # Phase 11 closed direct inserts; chat goes through send_chat.
 rpc "$TOKEN_B" send_chat "{\"p_game_id\":\"$GAME2\",\"p_body\":\"good game!\"}" > /dev/null
-outbox "game_id=eq.$GAME2&type=eq.chat&select=recipient,body" | py "
-import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==1 and rows[0]['recipient']=='$USER_A', rows
-assert rows[0]['body']=='good game!', rows[0]
-print('   chat message → other participant ✓')" || fail "chat notification"
+outbox "game_id=eq.$GAME2&type=eq.chat&select=recipient,body" \
+  | WANT="$USER_A" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+assert len(rows) == 1 and rows[0]["recipient"] == os.environ["WANT"], rows
+assert rows[0]["body"] == "good game!", rows[0]
+print("   chat message -> other participant ✓")' || fail "chat notification"
 
 step "9. Edge function (skipped unless deployed)"
 FN=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/functions/v1/send-push" \

@@ -75,6 +75,7 @@ enum RemoteGames {
         let updatedAt: String?
         let expiresAt: String?
         let unreadChat: Int?
+        let resultSeen: Bool?
         let players: [PlayerDTO]
         let moves: [MoveDTO]?
         let importLog: [String]?
@@ -91,6 +92,7 @@ enum RemoteGames {
             case updatedAt = "updated_at"
             case expiresAt = "expires_at"
             case unreadChat = "unread_chat"
+            case resultSeen = "result_seen"
             case importLog = "import_log"
         }
 
@@ -525,6 +527,58 @@ enum RemoteGames {
         struct P: Encodable { let p_game_id: UUID }
         return try await SupabaseService.client
             .rpc("fetch_game", params: P(p_game_id: id))
+            .execute().value
+    }
+
+    // MARK: - Result acknowledgment & review (Phase 12)
+
+    /// The local player saw the game-over screen: the game can move to
+    /// Past games on every device. Idempotent; no-op on active games.
+    static func markResultSeen(gameID: UUID) async throws {
+        struct P: Encodable { let p_game_id: UUID }
+        _ = try await SupabaseService.client
+            .rpc("mark_result_seen", params: P(p_game_id: gameID))
+            .execute()
+    }
+
+    /// One move of a finished game, as fetch_review returns it.
+    /// `rackBefore` (the seat's rack when the move was made) comes back
+    /// ONLY for the caller's own moves, only after the game ends, and
+    /// only for moves made after the Phase 12 migration — nil otherwise.
+    struct ReviewMoveDTO: Decodable {
+        let moveNumber: Int
+        let seat: Int
+        let kind: String
+        let placements: [Placement]?
+        let word: String?
+        let clientScore: Int?
+        let rackBefore: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case seat, kind, placements, word
+            case moveNumber = "move_number"
+            case clientScore = "client_score"
+            case rackBefore = "rack_before"
+        }
+    }
+
+    struct ReviewData: Decodable {
+        let mySeat: Int
+        let moves: [ReviewMoveDTO]
+
+        enum CodingKeys: String, CodingKey {
+            case moves
+            case mySeat = "my_seat"
+        }
+    }
+
+    /// Full move history for post-game review. Server refuses while the
+    /// game is active ('game_still_active') — rack history mid-game would
+    /// be a cheat vector.
+    static func fetchReview(gameID: UUID) async throws -> ReviewData {
+        struct P: Encodable { let p_game_id: UUID }
+        return try await SupabaseService.client
+            .rpc("fetch_review", params: P(p_game_id: gameID))
             .execute().value
     }
 

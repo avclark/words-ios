@@ -23,6 +23,12 @@ struct SavedGame: Identifiable, Codable {
     var expiresAt: Date?
     /// Phase 11: opponent chat messages newer than my read marker.
     var unreadChat: Int? = nil
+    /// Phase 12: the local player has SEEN the result (the game-over
+    /// screen appeared). Seen + finished = the game lives in Past games.
+    var resultSeen: Bool? = nil
+    /// Phase 12: per-game hint spends (see HintBudget).
+    var hintPlacementsUsed: Int? = nil
+    var hintBestWordsUsed: Int? = nil
 
     var committed: [BoardCoord: Tile]
     /// Tiles tentatively placed this turn — preserved so quitting mid-move
@@ -50,6 +56,10 @@ struct SavedGame: Identifiable, Codable {
         if gameOver != nil { return .finished }
         return turnState == .local ? .yourTurn : .waiting
     }
+
+    /// Past games = finished AND acknowledged (result seen). Presentation
+    /// only — stats always draw on every finished game.
+    var isArchived: Bool { gameOver != nil && resultSeen == true }
 }
 
 /// File-per-game store under Application Support. Loads everything at
@@ -106,6 +116,14 @@ final class GameStore {
         games.sorted { a, b in
             a.phase != b.phase ? a.phase < b.phase : a.updatedAt > b.updatedAt
         }
+    }
+
+    /// The main lobby: everything except archived (seen-and-finished) games.
+    var currentGames: [SavedGame] { lobbyOrder.filter { !$0.isArchived } }
+
+    /// Past games, most recent first.
+    var pastGames: [SavedGame] {
+        games.filter(\.isArchived).sorted { $0.updatedAt > $1.updatedAt }
     }
 
     func save(_ game: SavedGame) {

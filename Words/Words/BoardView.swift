@@ -7,6 +7,8 @@ struct BoardView: View {
     let state: BoardState
     let drag: DragController
     let metrics: BoardMetrics
+    /// Phase 12 tap-to-define: a committed (played) tile was tapped.
+    var onTapCommitted: ((BoardCoord) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -22,6 +24,7 @@ struct BoardView: View {
             }
             .padding(metrics.padding)
 
+            hintOutlines
             hoverHighlight
             scoreChip
         }
@@ -53,8 +56,11 @@ struct BoardView: View {
                     .opacity(hidden ? 0 : 1)
                     .scaleEffect(fresh ? 1.0 : 0.98)
                     .transition(.scale(scale: 1.25).combined(with: .opacity))
-                    // Committed tiles are inert: let touches pass through so a
-                    // pan can start on them just like on an empty square.
+                    // Committed tiles are inert for DRAGS: touches pass
+                    // through so a pan can start on them just like on an
+                    // empty square. Their TAPS are caught by the cell
+                    // below (tap-to-define) — a tap never moves anything,
+                    // so the drag invariants are untouched.
                     .allowsHitTesting(fresh)
                     .onTapGesture {
                         guard fresh else { return }
@@ -67,6 +73,15 @@ struct BoardView: View {
             }
         }
         .frame(width: metrics.cellSize, height: metrics.cellSize)
+        .contentShape(Rectangle())
+        // Tap-to-define on played tiles. A TapGesture fails as soon as
+        // the finger moves, so board pans starting on a committed tile
+        // still reach the pan gesture unharmed.
+        .onTapGesture {
+            guard state.committed[coord] != nil,
+                  !state.isPlacedThisTurn(coord) else { return }
+            onTapCommitted?(coord)
+        }
     }
 
     private func isBeingDragged(_ coord: BoardCoord) -> Bool {
@@ -89,6 +104,26 @@ struct BoardView: View {
     }
 
     // MARK: - Overlays
+
+    /// Phase 12 hint type 1: outlines around the cells each suggested
+    /// word would occupy — red for the best-scoring option, green for the
+    /// rest. Hit-test-disabled overlay; the board underneath is untouched.
+    @ViewBuilder
+    private var hintOutlines: some View {
+        ForEach(Array(state.hintHighlights.enumerated()), id: \.offset) { _, highlight in
+            let tint: Color = highlight.isBest ? .red : .green
+            ForEach(highlight.coords, id: \.self) { coord in
+                let origin = metrics.cellOrigin(coord)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(tint.opacity(highlight.isBest ? 0.95 : 0.7),
+                                  lineWidth: highlight.isBest ? 2.5 : 1.5)
+                    .frame(width: metrics.cellSize, height: metrics.cellSize)
+                    .offset(x: origin.x, y: origin.y)
+                    .allowsHitTesting(false)
+            }
+        }
+        .transition(.opacity)
+    }
 
     @ViewBuilder
     private var hoverHighlight: some View {

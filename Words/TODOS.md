@@ -9,3 +9,5 @@
 - passing should pop up a dialog to confirm, bc it's too easy to accidentally tap
 - Fuzzy search. Currently search only returns results that are exact matches
 
+- highlight UI needs improvement
+- also, we we should have three levels instead of two (red/green): Red for best word available, yellow for second best word, green for the rest. (or whatever colors make the most sense).

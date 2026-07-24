@@ -329,7 +329,8 @@ final class GameSync {
     private func rollback(gameID: UUID, serverMessage: String) async {
         if let dto = try? await RemoteGames.fetchGame(id: gameID),
            let fresh = Self.savedGame(from: dto, localUserID: userID) {
-            store.save(fresh)
+            let local = store.games.first { $0.id == gameID }
+            store.save(Self.carryLocalOnly(from: local, into: fresh))
         }
         chains[gameID]?.cancel()
         chains[gameID] = nil
@@ -390,7 +391,7 @@ final class GameSync {
             if local == nil || serverStamp > localStamp.addingTimeInterval(2) {
                 if let dto = try? await RemoteGames.fetchGame(id: summary.gameID),
                    let fresh = Self.savedGame(from: dto, localUserID: userID) {
-                    store.save(fresh)
+                    store.save(Self.carryLocalOnly(from: local, into: fresh))
                 }
             }
         }
@@ -443,6 +444,17 @@ final class GameSync {
                          p_swap_letters: tiles.map { String($0.letter) },
                          p_op_id: opID)
         }
+    }
+
+    /// Fields the server doesn't store ride through a server rebuild from
+    /// the previous cached copy: hint spends are client-only, and a local
+    /// result acknowledgment must survive until the server echoes it back.
+    static func carryLocalOnly(from local: SavedGame?, into fresh: SavedGame) -> SavedGame {
+        var merged = fresh
+        merged.hintPlacementsUsed = local?.hintPlacementsUsed
+        merged.hintBestWordsUsed = local?.hintBestWordsUsed
+        if merged.resultSeen != true { merged.resultSeen = local?.resultSeen }
+        return merged
     }
 
     /// Rebuild a cacheable SavedGame from server state. Used for rollback,
@@ -523,6 +535,7 @@ final class GameSync {
             opponentIsHuman: opponentIsHuman,
             expiresAt: opponentIsHuman ? dto.expiresDate : nil,
             unreadChat: dto.unreadChat,
+            resultSeen: dto.resultSeen,
             committed: RemoteGames.committed(fromBoard: dto.board ?? [:]),
             placed: [:],
             pendingBlank: nil,

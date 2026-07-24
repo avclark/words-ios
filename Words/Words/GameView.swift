@@ -21,11 +21,24 @@ struct GameView: View {
     @State private var channel: GameChannel?
     @State private var showChat = false
     @State private var takeoverEmoji: String?
+    // Phase 12: result overlay dismissal (browse the finished board),
+    // review, hints, tap-to-define.
+    @State private var resultDismissed = false
+    @State private var showReview = false
+    @State private var reviewEngine: ReviewEngine?
+    @State private var showHintMenu = false
+    @State private var hintWorking = false
+    @State private var hintNotice: String?
+    @State private var definitionRequest: DefinitionRequest?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         // Diagnostic: GameView body evaluations around the chat-open window.
         let _ = chatLog.notice("GameView BODY showChat=\(showChat) chatNil=\(chat == nil)")
+        // Same probe for the review sheet (reproducible sibling of the
+        // chat blank-sheet bug): did the PRESENTING view re-evaluate when
+        // showReview flipped?
+        let _ = reviewLog.notice("GameView BODY showReview=\(showReview) engineNil=\(reviewEngine == nil)")
         return GeometryReader { geo in
             let metrics = BoardMetrics.fitting(width: min(geo.size.width - 8, 440))
             // Rack must never exceed screen width: an over-wide child makes the
@@ -54,7 +67,12 @@ struct GameView: View {
 
                 Spacer(minLength: 0)
 
-                BoardView(state: state, drag: drag, metrics: metrics)
+                BoardView(state: state, drag: drag, metrics: metrics,
+                          onTapCommitted: { coord in
+                              let words = state.committedWords(through: coord)
+                              guard !words.isEmpty else { return }
+                              definitionRequest = DefinitionRequest(words: words)
+                          })
                     .frame(width: metrics.side, height: metrics.side)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .contentShape(Rectangle())
@@ -69,7 +87,11 @@ struct GameView: View {
                     .background(frameReporter { drag.rackFrame = $0 })
                     .padding(.horizontal, 12)
 
-                actionBar
+                if state.gameOver == nil {
+                    actionBar
+                } else {
+                    finishedBar
+                }
             }
             .padding(.top, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -88,14 +110,30 @@ struct GameView: View {
             }
             // Game over is an overlay, not a view swap: the board hierarchy
             // must never be torn down while a gesture could be live.
+            // Its appearance IS the result acknowledgment (Phase 12) —
+            // seeing this screen is what moves the game to Past games.
+            // "Review game" dismisses it into the interactive finished
+            // board (tap words for definitions, open the analysis,
+            // return via the Result button).
             .overlay {
-                if let summary = state.gameOver {
+                if let summary = state.gameOver, !resultDismissed {
                     GameOverView(summary: summary,
                                  localName: state.localPlayer.profile.displayName,
                                  opponentName: state.opponent.profile.displayName,
                                  newGameLabel: state.opponentIsHuman ? "Rematch" : "New Game",
                                  onHome: { onExit?() },
-                                 onNewGame: { onNewGame?() })
+                                 onNewGame: { onNewGame?() },
+                                 onReview: {
+                                     withAnimation(.easeOut(duration: 0.25)) {
+                                         resultDismissed = true
+                                     }
+                                 })
+                    // Invariant 5: presentation-lifecycle mutation goes
+                    // through .task + yield, not onAppear.
+                    .task {
+                        await Task.yield()
+                        acknowledgeResult()
+                    }
                 }
             }
             .alert("Nudge", isPresented: .init(get: { pingFeedback != nil },
@@ -119,6 +157,9 @@ struct GameView: View {
         }
         .coordinateSpace(name: Self.spaceName)
         .task(id: state.gameID) {
+            // Definitions load lazily off-main so the first define tap
+            // never stalls; harmless if already loaded.
+            Definitions.warmUp()
             await setUpChat()
         }
         .onDisappear {
@@ -164,6 +205,119 @@ struct GameView: View {
             }
             .interactiveDismissDisabled()
         }
+        .sheet(item: $definitionRequest) { request in
+            DefinitionSheet(request: request)
+        }
+        .sheet(isPresented: $showReview) {
+            // Diagnostic: every evaluation of the sheet CONTENT closure —
+            // did presentation evaluate it at all, and which branch?
+            let engineDesc = reviewEngine.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
+            let _ = reviewLog.notice("review sheet CLOSURE eval engineNil=\(reviewEngine == nil) engine=\(engineDesc, privacy: .public)")
+            if let reviewEngine {
+                ReviewView(engine: reviewEngine,
+                           opponentName: state.opponent.profile.displayName)
+            } else {
+                // openReview creates the engine before presenting, so this
+                // is theoretical — but a sheet must never render as pure
+                // emptiness, and hitting this branch would itself be the
+                // diagnosis.
+                ProgressView()
+                    .tint(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .presentationDetents([.large])
+                    .presentationBackground(HomeView.background)
+                    .onAppear { reviewLog.notice("review sheet NIL-BRANCH visible (fallback spinner)") }
+            }
+        }
+        .alert("Hints", isPresented: .init(get: { hintNotice != nil },
+                                           set: { if !$0 { hintNotice = nil } })) {
+            Button("OK") { hintNotice = nil }
+        } message: {
+            Text(hintNotice ?? "")
+        }
+        .confirmationDialog("Need a nudge?", isPresented: $showHintMenu,
+                            titleVisibility: .visible) {
+            if state.hintPlacementsLeft > 0 {
+                Button("Show playable spots (\(state.hintPlacementsLeft) left)") {
+                    requestPlacementsHint()
+                }
+            }
+            if state.hintBestWordsLeft > 0 {
+                Button("Stage the best word (\(state.hintBestWordsLeft) left)") {
+                    requestBestWordHint()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You get \(HintBudget.placements) of each per game — free, no strings.")
+        }
+    }
+
+    // MARK: - Phase 12: result acknowledgment, review, hints
+
+    /// The game-over screen is on screen: mark the result seen (locally
+    /// at once; server-side so the archive follows the account).
+    private func acknowledgeResult() {
+        guard state.markResultSeen() else { return }
+        guard state.isRemote else { return }
+        let gameID = state.gameID
+        Task { try? await RemoteGames.markResultSeen(gameID: gameID) }
+    }
+
+    private func openReview() {
+        reviewLog.notice("review button TAPPED engineNil=\(reviewEngine == nil) showReview=\(showReview)")
+        if reviewEngine == nil {
+            reviewEngine = ReviewEngine(gameID: state.gameID)
+        }
+        showReview = true
+    }
+
+    /// Hint type 1 — outline the top playable spots. Generation runs off
+    /// the main thread (it may pay the one-time trie build on a
+    /// human-game board); the hint button shows a spinner meanwhile.
+    private func requestPlacementsHint() {
+        guard !hintWorking, state.hintPlacementsLeft > 0 else { return }
+        hintWorking = true
+        state.recallAll()   // hint from the FULL rack
+        let board = state.committed
+        let rack = state.rack
+        Task {
+            let moves = await Task.detached(priority: .userInitiated) {
+                AIPlayer.topMoves(board: board, rack: rack,
+                                  limit: HintBudget.placementSpots)
+            }.value
+            hintWorking = false
+            if moves.isEmpty {
+                hintNotice = "No plays are possible with this rack — swap or pass."
+            } else {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    state.applyPlacementsHint(moves)
+                }
+            }
+        }
+    }
+
+    /// Hint type 2 — stage the best word without committing it.
+    private func requestBestWordHint() {
+        guard !hintWorking, state.hintBestWordsLeft > 0 else { return }
+        hintWorking = true
+        state.recallAll()
+        let board = state.committed
+        let rack = state.rack
+        Task {
+            let best = await Task.detached(priority: .userInitiated) {
+                AIPlayer.bestMove(board: board, rack: rack)
+            }.value
+            hintWorking = false
+            if let best {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    state.applyBestWordHint(best)
+                }
+                drag.refreshZoom(state: state)
+            } else {
+                hintNotice = "No plays are possible with this rack — swap or pass."
+            }
+        }
     }
 
     // MARK: - Pieces
@@ -174,7 +328,7 @@ struct GameView: View {
     }
 
     private var actionBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ActionButton(icon: "shuffle", label: "Shuffle") {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                     state.shuffleRack()
@@ -189,6 +343,8 @@ struct GameView: View {
             } label: {
                 Text(playLabel)
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .foregroundStyle(canPlay ? .black : .white.opacity(0.4))
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background(
@@ -204,6 +360,8 @@ struct GameView: View {
                 drag.refreshZoom(state: state)
             }
 
+            hintButton
+
             ActionButton(icon: "arrow.2.squarepath", label: "Swap") {
                 showSwapSheet = true
             }
@@ -218,7 +376,7 @@ struct GameView: View {
             }
             .disabled(state.waitingForOpponent || state.gameOver != nil)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.bottom, 6)
         .sheet(isPresented: $showSwapSheet) {
             SwapView(rack: state.rack, bagCount: state.bagRemaining) { ids in
@@ -227,6 +385,55 @@ struct GameView: View {
                 }
             }
         }
+    }
+
+    /// The hint entry point: a lightbulb that opens the two-hint menu,
+    /// with a spinner while the generator is thinking. Dimmed once both
+    /// budgets are spent.
+    private var hintButton: some View {
+        ZStack {
+            ActionButton(icon: "lightbulb", label: "Hint") {
+                showHintMenu = true
+            }
+            .opacity(hintWorking ? 0 : 1)
+            if hintWorking {
+                ProgressView()
+                    .tint(.yellow)
+            }
+        }
+        .disabled(state.waitingForOpponent || state.gameOver != nil
+                  || hintWorking
+                  || (state.hintPlacementsLeft == 0 && state.hintBestWordsLeft == 0))
+        .opacity(state.hintPlacementsLeft == 0 && state.hintBestWordsLeft == 0 ? 0.4 : 1)
+    }
+
+    /// Replaces the action bar once the game is over: back to the result
+    /// overlay, into the analysis, or straight to a rematch. The board
+    /// above stays fully alive for browsing and tap-to-define.
+    private var finishedBar: some View {
+        HStack(spacing: 8) {
+            ActionButton(icon: "flag.checkered", label: "Result") {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    resultDismissed = false
+                }
+            }
+            if state.isRemote {
+                ActionButton(icon: "magnifyingglass", label: "Review") {
+                    openReview()
+                }
+            }
+            Button {
+                onNewGame?()
+            } label: {
+                Text(state.opponentIsHuman ? "REMATCH" : "NEW GAME")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(Capsule().fill(Color.yellow))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Chat & realtime

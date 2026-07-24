@@ -52,8 +52,12 @@ struct SwapView: View {
     }
 }
 
-/// Placeholder game-over screen, shown as an overlay so the board hierarchy
-/// underneath is never torn down (see CLAUDE.md invariant 2).
+/// The result screen, shown as an overlay so the board hierarchy
+/// underneath is never torn down (see CLAUDE.md invariant 2). Its
+/// appearance IS the result acknowledgment (Phase 12): the owner marks
+/// the game seen, moving it to Past games. "Review game" dismisses the
+/// overlay into the interactive finished board; "Review" analysis lives
+/// behind onAnalyze (nil = unavailable, e.g. pre-server local games).
 struct GameOverView: View {
     let summary: GameOverSummary
     let localName: String
@@ -61,6 +65,7 @@ struct GameOverView: View {
     var newGameLabel: String = "New Game"
     let onHome: () -> Void
     let onNewGame: () -> Void
+    var onReview: (() -> Void)? = nil
 
     private var winnerText: String {
         // Resign/expiry carry an explicit winner — the higher scorer can
@@ -113,6 +118,9 @@ struct GameOverView: View {
 
             Button(newGameLabel, action: onNewGame)
                 .buttonStyle(.borderedProminent)
+            if let onReview {
+                Button("Review game", action: onReview)
+            }
             Button("Home", action: onHome)
         }
         .padding(32)

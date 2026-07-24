@@ -42,7 +42,7 @@ cleanup() {
   done
   diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
-trap 'diag "ABORT at line $LINENO: [$BASH_COMMAND] exited $?"' ERR
+trap 'diag "ERR at line $LINENO: [$BASH_COMMAND] exited $? (fatal unless a retry recovers — real aborts end with a FAIL/abort line)"' ERR
 trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
 trap cleanup EXIT
 
@@ -133,13 +133,13 @@ echo "   game=$GAME"
 step "1. Chat: send text + emoji, ordering, unread counts"
 rpc "$TOKEN_A" send_chat "{\"p_game_id\":\"$GAME\",\"p_body\":\"hi!\"}" > /dev/null
 rpc "$TOKEN_A" send_chat "{\"p_game_id\":\"$GAME\",\"p_body\":\"🎉\",\"p_kind\":\"emoji\"}" > /dev/null
-rpc "$TOKEN_B" fetch_chat "{\"p_game_id\":\"$GAME\"}" | py "
-import json,sys
-d=json.load(sys.stdin)
-msgs=d['messages']
-assert len(msgs)==2 and msgs[0]['body']=='hi!' and msgs[1]['kind']=='emoji', msgs
-assert d['my_last_read']==0
-print('   two messages in order, B unread ✓')" || fail "chat fetch"
+rpc "$TOKEN_B" fetch_chat "{\"p_game_id\":\"$GAME\"}" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+msgs = d["messages"]
+assert len(msgs) == 2 and msgs[0]["body"] == "hi!" and msgs[1]["kind"] == "emoji", msgs
+assert d["my_last_read"] == 0
+print("   two messages in order, B unread ✓")' || fail "chat fetch"
 rpc "$TOKEN_B" fetch_game "{\"p_game_id\":\"$GAME\"}" | py '
 import json,sys
 d=json.load(sys.stdin)
@@ -189,16 +189,20 @@ curl -sf --retry 2 --retry-delay 1 -X PATCH "$URL/rest/v1/profiles?id=eq.$USER_A
 HANDLE="jt$TS"
 rpc "$TOKEN_A" set_username "{\"p_username\":\"$HANDLE\"}" | grep -q '"ok"' \
   || fail "set_username didn't return ok (handle collision or invalid?)"
-rpc "$TOKEN_B" search_players '{"p_query":"jessica"}' | py "
-import json,sys
-rows=json.load(sys.stdin)
-match=[r for r in rows if r['user_id']=='$USER_A']
+rpc "$TOKEN_B" search_players '{"p_query":"jessica"}' \
+  | WANT="$USER_A" HANDLE="$HANDLE" python3 -c '
+import json, sys, os
+rows = json.load(sys.stdin)
+match = [r for r in rows if r["user_id"] == os.environ["WANT"]]
 assert match, rows
-assert match[0]['state']=='friend' and match[0]['username']=='$HANDLE', match[0]
-print('   partial display-name match, with @handle + relationship ✓')" || fail "name search"
-rpc "$TOKEN_B" search_players "{\"p_query\":\"${HANDLE:0:8}\"}" | py "
-import json,sys; assert any(r['user_id']=='$USER_A' for r in json.load(sys.stdin))
-print('   username match still works ✓')" || fail "username search"
+assert match[0]["state"] == "friend", match[0]
+assert match[0]["username"] == os.environ["HANDLE"], match[0]
+print("   partial display-name match, with @handle + relationship ✓")' || fail "name search"
+rpc "$TOKEN_B" search_players "{\"p_query\":\"${HANDLE:0:8}\"}" \
+  | WANT="$USER_A" python3 -c '
+import json, sys, os
+assert any(r["user_id"] == os.environ["WANT"] for r in json.load(sys.stdin))
+print("   username match still works ✓")' || fail "username search"
 rpc "$TOKEN_B" search_players '{"p_query":"zzzznobody"}' | py '
 import json,sys; assert json.load(sys.stdin)==[]
 print("   no match → empty ✓")' || fail "no-match empty"
@@ -251,11 +255,12 @@ import json,sys; assert json.load(sys.stdin)==[], "friendship silently restored 
 print("   B: still not friends after unblock ✓")' || fail "friendship state (B)"
 rpc "$TOKEN_A" send_friend_request "{\"p_user\":\"$USER_B\"}" | grep -q '"sent"' || fail "unblock didn't restore requests"
 rpc "$TOKEN_B" respond_friend_request "{\"p_user\":\"$USER_A\",\"p_accept\":true}" | grep -q '"accepted"' || fail "re-friending after unblock"
-rpc "$TOKEN_A" list_friends '{}' | py "
-import json,sys
-d=json.load(sys.stdin)
-assert any(e['user_id']=='$USER_B' and e['state']=='friend' for e in d), d
-print('   deliberate re-friend works ✓')" || fail "re-friend state"
+rpc "$TOKEN_A" list_friends '{}' | WANT="$USER_B" python3 -c '
+import json, sys, os
+d = json.load(sys.stdin)
+assert any(e["user_id"] == os.environ["WANT"] and e["state"] == "friend"
+           for e in d), d
+print("   deliberate re-friend works ✓")' || fail "re-friend state"
 # Unblock restores rematch too — proving the refusal was the block itself.
 rpc "$TOKEN_B" request_rematch "{\"p_game_id\":\"$GAME\"}" | py '
 import json,sys
@@ -267,13 +272,14 @@ echo "   report stored (service-only), unblock works ✓"
 step "7b. reports_readable: human-legible for service, sealed for clients"
 READABLE=$(curl -s "$URL/rest/v1/reports_readable?select=reporter_name,reported_name,reason,reported_message" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
-echo "$READABLE" | py "
-import json,sys
-rows=json.load(sys.stdin)
-mine=[r for r in rows if r['reason']=='test report']
+echo "$READABLE" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+mine = [r for r in rows if r["reason"] == "test report"]
 assert mine, rows
-assert mine[0]['reporter_name'] and mine[0]['reported_name'], mine[0]
-print('   view joins names ✓ (reporter=%s reported=%s)' % (mine[0]['reporter_name'], mine[0]['reported_name']))" \
+assert mine[0]["reporter_name"] and mine[0]["reported_name"], mine[0]
+print("   view joins names ✓ (reporter=%s reported=%s)"
+      % (mine[0]["reporter_name"], mine[0]["reported_name"]))' \
   || fail "readable view: $READABLE"
 CLIENT_VIEW=$(curl -s "$URL/rest/v1/reports_readable?select=id" \
   -H "apikey: $KEY" -H "Authorization: Bearer $TOKEN_B")
@@ -284,18 +290,18 @@ echo "   clients denied ✓"
 step "9. Delete: my lobby only, opponent untouched, durable across sync"
 # $GAME is the finished (resigned) A-B game. A hides it.
 rpc "$TOKEN_A" delete_game "{\"p_game_id\":\"$GAME\"}" | grep -q '"hidden"' || fail "hide finished human game"
-rpc "$TOKEN_A" fetch_lobby '{}' | py "
-import json,sys
-assert not any(g['game_id']=='$GAME' for g in json.load(sys.stdin))
-print('   gone from A lobby ✓')" || fail "A lobby still shows hidden game"
-rpc "$TOKEN_A" fetch_lobby '{}' | py "
-import json,sys
-assert not any(g['game_id']=='$GAME' for g in json.load(sys.stdin))
-print('   still gone on re-sync (relaunch equivalent) ✓')" || fail "hide not durable"
-rpc "$TOKEN_B" fetch_lobby '{}' | py "
-import json,sys
-assert any(g['game_id']=='$GAME' for g in json.load(sys.stdin))
-print('   B (opponent) still has their copy ✓')" || fail "opponent copy affected"
+rpc "$TOKEN_A" fetch_lobby '{}' | GAME="$GAME" python3 -c '
+import json, sys, os
+assert not any(g["game_id"] == os.environ["GAME"] for g in json.load(sys.stdin))
+print("   gone from A lobby ✓")' || fail "A lobby still shows hidden game"
+rpc "$TOKEN_A" fetch_lobby '{}' | GAME="$GAME" python3 -c '
+import json, sys, os
+assert not any(g["game_id"] == os.environ["GAME"] for g in json.load(sys.stdin))
+print("   still gone on re-sync (relaunch equivalent) ✓")' || fail "hide not durable"
+rpc "$TOKEN_B" fetch_lobby '{}' | GAME="$GAME" python3 -c '
+import json, sys, os
+assert any(g["game_id"] == os.environ["GAME"] for g in json.load(sys.stdin))
+print("   B (opponent) still has their copy ✓")' || fail "opponent copy affected"
 # Active human games refuse.
 ACTIVE=$(rpc "$TOKEN_A" create_game "{\"p_opponent\":\"$USER_B\"}" \
   | py 'import json,sys; print(json.load(sys.stdin)["game_id"])')
@@ -362,10 +368,8 @@ echo "   still closed for friends — game rule, not friendship rule ✓"
 
 step "11. Realtime publication includes chat + games"
 PUB=$(curl -s -X POST "$URL/rest/v1/rpc/fetch_lobby" -H "apikey: $KEY" -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" -d '{}' -o /dev/null -w '%{http_code}')
-python3 - << EOF
 # Publication membership can't be read over PostgREST; the app degrades to
 # polling if realtime is off, so this is informational only.
-print("   (publication verified implicitly — client falls back to polling if absent)")
-EOF
+echo "   (publication verified implicitly — client falls back to polling if absent)"
 
 printf '\nALL PHASE 11 CHECKS PASSED\n'

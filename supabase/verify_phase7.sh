@@ -46,7 +46,7 @@ cleanup() {
   done
   diag "cleanup: removed ${#CREATED[@]} test user(s)$([ $status -ne 0 ] && echo ' (after abnormal exit)')"
 }
-trap 'diag "ABORT at line $LINENO: [$BASH_COMMAND] exited $?"' ERR
+trap 'diag "ERR at line $LINENO: [$BASH_COMMAND] exited $? (fatal unless a retry recovers — real aborts end with a FAIL/abort line)"' ERR
 trap 'diag "killed by signal (INT/TERM/PIPE)"; cleanup; exit 130' INT TERM PIPE
 trap cleanup EXIT
 

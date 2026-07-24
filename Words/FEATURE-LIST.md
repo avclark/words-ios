@@ -70,6 +70,12 @@ Platform: iPhone only. Backend: Supabase. Auth: Sign in with Apple only.
 - Asynchronous 1v1 games with friends (server is source of truth)
 - Multiple simultaneous games
 - Lobby grouped/sorted: Your Turn → Their Turn → Finished
+- **Past games (Phase 12)**: a finished game stays in the lobby until the
+  player has SEEN its result (the game-over screen appearing is the
+  acknowledgment — same pattern as the takeover fire-once marker, never a
+  timer), then moves to the Past games archive. Per-seat and synced
+  (game_players.result_seen_at). Presentation only: profile stats always
+  draw on every finished game. Swipe-delete works there like the lobby.
 - Start game from friends list or lobby
 - Rematch (one tap, from game-over)
 - Resign
@@ -88,24 +94,33 @@ Two distinct hint types, both powered by the existing move generator (which
 already produces every legal candidate, ranked by score). No currency, no XP,
 no purchases.
 
-- **Hint type 1 — Show playable locations.** Outlines every place a word can
-  be played from the current rack: green outlines for valid placements, red
-  outline for the best/highest-scoring option. Does NOT place tiles.
-  *Design note:* an open board with a full rack can yield hundreds of legal
-  placements — outlining all of them is visual soup. Show the top N (start
-  ~10–15) or filter to distinct anchor positions. Tuning decision at build.
-- **Hint type 2 — Show best word.** Actually stages the tiles on the board
-  forming the highest-scoring play. Does NOT commit it — the player can then
-  play it, recall it, or do something else.
-- **Budget: 5 of EACH type per game.** Both values must be single named
-  config constants, trivially adjustable — not magic numbers scattered
-  through the code.
-- **Post-game review**: after a game ends, show best missed plays per turn
-  ("your best play on turn 7 was QUARTZ for 68"). Free — this is the feature
-  Scrabble GO puts behind a subscription.
-- **Tap-to-define**: tap any played word on the board for its definition.
-  Requires a definitions data source (ENABLE has none) — Wiktionary/WordNet
-  extract bundled locally, or an API.
+- **Hint type 1 — Show playable locations** (built, Phase 12): outlines
+  where words can be played from the current rack — green for valid spots,
+  red for the best-scoring one. Does NOT place tiles. Capping decision:
+  top 12 DISTINCT positions (start cell + orientation, best word per
+  position) — dedup-by-position is what kills the visual soup
+  (HintBudget.placementSpots).
+- **Hint type 2 — Show best word** (built, Phase 12): stages the tiles of
+  the highest-scoring play on the board. Does NOT commit — play it, recall
+  it, or do something else.
+- **Budget: 5 of EACH type per game** — HintBudget.placements /
+  HintBudget.bestWord in BoardState.swift, single named constants. Free,
+  no currency; when a game's budget is spent, it's spent.
+- **Post-game review** (built, Phase 12): summary first (best play,
+  biggest missed opportunity, points left on the table, average per turn),
+  then turn-by-turn with the board as it stood ("your best play on turn 7
+  was QUARTZ for 68"). Only the player's own turns. Computed on demand
+  against per-turn rack history (move_private, server-side, readable only
+  via fetch_review after the game ends and only for your own seat),
+  cached locally, never stored server-side. Progressive rendering — turns
+  appear as they're analyzed. Free — this is the feature Scrabble GO puts
+  behind a subscription.
+- **Tap-to-define** (built, Phase 12): tap any played word on the board
+  for its definition. Data source: bundled WordNet 3.1 extract intersected
+  with ENABLE (~58k entries, ~4MB, permissive license with attribution) —
+  works offline, incl. AI games. Regular inflections resolve via suffix
+  stripping; irregulars baked in from WordNet's exception tables; obscure
+  ENABLE-only words honestly say "valid word, no definition".
 
 ### Chat & delight (the signature feature)
 - In-game chat, iMessage-style bubbles, per game. Chat lives and dies

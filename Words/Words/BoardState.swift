@@ -26,6 +26,26 @@ struct GameOverSummary: Equatable, Codable {
     var localWon: Bool? = nil
 }
 
+/// Hint budgets (Phase 12) — single named constants per FEATURE-LIST, so
+/// tuning is a one-line change. No currency, no purchases: when they're
+/// gone for a game, they're gone.
+enum HintBudget {
+    /// "Show playable spots" uses per game.
+    static let placements = 5
+    /// "Stage the best word" uses per game.
+    static let bestWord = 5
+    /// How many distinct positions the spots hint outlines (top N
+    /// positions best-first; the best one draws red, the rest green).
+    static let placementSpots = 12
+}
+
+/// One outlined hint region on the board (the cells a suggested word
+/// would occupy). `isBest` = the highest-scoring option (red outline).
+struct HintHighlight: Equatable {
+    let coords: [BoardCoord]
+    let isBest: Bool
+}
+
 /// Whose turn it is. `.opponent` covers the whole time the other side holds
 /// the turn — for the local AI that's a second or two of computing; for a
 /// future remote player it could be hours. The game screen renders the same
@@ -114,6 +134,20 @@ final class BoardState {
 
     /// Set when a blank tile lands on the board and needs a letter.
     var pendingBlank: BoardCoord?
+
+    /// Phase 12: has the local player SEEN this game's result? Finished
+    /// games move to Past games only after acknowledgment (the game-over
+    /// screen appearing) — never on a timer. Synced to the server so the
+    /// archive survives reinstall; stats are untouched either way.
+    private(set) var resultSeen = false
+
+    /// Phase 12 hints. Highlights are transient UI (never persisted);
+    /// usage counts are per-game and persist.
+    private(set) var hintHighlights: [HintHighlight] = []
+    private(set) var hintPlacementsUsed = 0
+    private(set) var hintBestWordsUsed = 0
+    var hintPlacementsLeft: Int { max(0, HintBudget.placements - hintPlacementsUsed) }
+    var hintBestWordsLeft: Int { max(0, HintBudget.bestWord - hintBestWordsUsed) }
 
     /// Drives the opponent's turns. Today always the local AI; a remote
     /// implementation slots in here without changing anything above it.
@@ -204,6 +238,9 @@ final class BoardState {
         opponentIsHuman = saved.opponentIsHuman ?? false
         expiresAt = saved.expiresAt
         unreadChat = saved.unreadChat ?? 0
+        resultSeen = saved.resultSeen ?? false
+        hintPlacementsUsed = saved.hintPlacementsUsed ?? 0
+        hintBestWordsUsed = saved.hintBestWordsUsed ?? 0
         if !opponentIsHuman { AIPlayer.warmUp() }
     }
 
@@ -229,6 +266,9 @@ final class BoardState {
                   opponentIsHuman: opponentIsHuman,
                   expiresAt: expiresAt,
                   unreadChat: unreadChat,
+                  resultSeen: resultSeen,
+                  hintPlacementsUsed: hintPlacementsUsed,
+                  hintBestWordsUsed: hintBestWordsUsed,
                   committed: committed,
                   placed: placed,
                   pendingBlank: pendingBlank,
@@ -342,6 +382,98 @@ final class BoardState {
         localRack.shuffle()
     }
 
+    // MARK: - Result acknowledgment (Phase 12)
+
+    /// The game-over screen was shown — the result is officially SEEN and
+    /// the game can move to Past games. Returns true exactly once so the
+    /// caller knows to sync the acknowledgment (GameView fires the RPC;
+    /// this class stays network-free).
+    @discardableResult
+    func markResultSeen() -> Bool {
+        guard gameOver != nil, !resultSeen else { return false }
+        resultSeen = true
+        autosave()
+        return true
+    }
+
+    // MARK: - Hints (Phase 12)
+
+    private func clearHints() {
+        if !hintHighlights.isEmpty { hintHighlights = [] }
+    }
+
+    /// Hint type 1 — outline where words can go. `moves` is best-first
+    /// from AIPlayer.topMoves (computed off-main by the caller); the first
+    /// gets the "best" (red) outline. Spends one use only if something is
+    /// actually shown.
+    func applyPlacementsHint(_ moves: [AIPlayer.Move]) {
+        guard gameOver == nil, turnState == .local,
+              hintPlacementsLeft > 0, !moves.isEmpty else { return }
+        hintPlacementsUsed += 1
+        hintHighlights = moves.enumerated().map { index, move in
+            HintHighlight(coords: Array(move.placement.keys), isBest: index == 0)
+        }
+        autosave()
+    }
+
+    /// Hint type 2 — stage the best word on the board without committing:
+    /// the player can PLAY it, recall it, or ignore it. Rack tiles are
+    /// matched by letter (blanks get the move's assigned letter). Bails
+    /// without spending a use if the board or rack shifted under the
+    /// computation (a cell filled, a tile missing).
+    func applyBestWordHint(_ move: AIPlayer.Move) {
+        guard gameOver == nil, turnState == .local, hintBestWordsLeft > 0 else { return }
+        recallAll()
+        clearHints()
+        var staged: [(BoardCoord, Tile)] = []
+        var pool = localRack
+        for (coord, wanted) in move.placement {
+            guard !isOccupied(coord),
+                  let idx = pool.firstIndex(where: { $0.letter == wanted.letter })
+            else { return }
+            var tile = pool.remove(at: idx)
+            if tile.isBlank { tile.assignedLetter = wanted.assignedLetter }
+            staged.append((coord, tile))
+        }
+        guard !staged.isEmpty else { return }
+        hintBestWordsUsed += 1
+        for (coord, tile) in staged {
+            localRack.removeAll { $0.id == tile.id }
+            placed[coord] = tile
+        }
+        status = nil
+        autosave()
+    }
+
+    // MARK: - Tap-to-define (Phase 12)
+
+    /// Every word (2+ letters) of COMMITTED tiles through a cell — what a
+    /// tap on a played tile should define. Tentative tiles don't count;
+    /// they're not played yet.
+    func committedWords(through coord: BoardCoord) -> [String] {
+        guard committed[coord] != nil else { return [] }
+        var words: [String] = []
+        for horizontal in [true, false] {
+            var start = coord
+            while true {
+                let prev = BoardCoord(row: start.row - (horizontal ? 0 : 1),
+                                      col: start.col - (horizontal ? 1 : 0))
+                guard prev.isValid, committed[prev] != nil else { break }
+                start = prev
+            }
+            var letters = ""
+            var cursor = start
+            while cursor.isValid, let tile = committed[cursor],
+                  let letter = tile.displayLetter {
+                letters.append(letter)
+                cursor = BoardCoord(row: cursor.row + (horizontal ? 0 : 1),
+                                    col: cursor.col + (horizontal ? 1 : 0))
+            }
+            if letters.count > 1 { words.append(letters) }
+        }
+        return words
+    }
+
     // MARK: - Playing a move
 
     /// Attempt to play the current placement as a real move, enforcing every
@@ -420,6 +552,7 @@ final class BoardState {
         turnNumber += 1
         consecutivePasses = 0
         status = nil
+        clearHints()
         log("\(localPlayer.profile.displayName) played \(wordsFormed[0]) +\(score)")
         // Endgame: bag empty and the local player used every tile — the game
         // ends now; the opponent does not get another turn.
@@ -441,6 +574,7 @@ final class BoardState {
         turnNumber += 1
         consecutivePasses += 1
         status = nil
+        clearHints()
         log("\(localPlayer.profile.displayName) passed")
         if isRemote {
             onRemoteMove?(self, RemoteMove(seat: 0, kind: .pass))
@@ -485,6 +619,7 @@ final class BoardState {
         turnNumber += 1
         consecutivePasses = 0 // a swap is an action, not a pass
         status = nil
+        clearHints()
         log("\(localPlayer.profile.displayName) swapped \(discarded.count) tile\(discarded.count == 1 ? "" : "s")")
         beginOpponentTurn()
         autosave()
@@ -498,6 +633,7 @@ final class BoardState {
     /// (future remote player).
     private func beginOpponentTurn() {
         guard gameOver == nil else { return }
+        clearHints()
         // A remote human's turn has no local engine: the rack lives on the
         // server (empty here by design) and the turn resolves when a server
         // refresh shows their move. Everything below is AI-only.
@@ -647,6 +783,7 @@ final class BoardState {
     func applyServerRefresh(from saved: SavedGame) {
         guard isRemote, gameOver == nil else { return }
         guard saved.turnNumber > turnNumber || saved.gameOver != nil else { return }
+        clearHints()
 
         for (coord, tile) in saved.committed where committed[coord] == nil {
             // The local player may have tentatively placed tiles while

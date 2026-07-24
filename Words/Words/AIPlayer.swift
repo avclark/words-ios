@@ -46,6 +46,38 @@ enum AIPlayer {
         move(board: board, rack: rack, difficulty: .hard)
     }
 
+    /// Hints (Phase 12): the best move at each of up to `limit` DISTINCT
+    /// positions (start cell + orientation), best-first. Deduping by
+    /// position is what keeps "show playable spots" readable — an open
+    /// board yields hundreds of raw candidates, but they collapse onto a
+    /// handful of anchor spots, and only the best word per spot matters
+    /// for an outline. Pure function of value-type snapshots — safe on
+    /// any thread.
+    static func topMoves(board: [BoardCoord: Tile], rack: [Tile],
+                         limit: Int) -> [Move] {
+        let scorer = MoveScorer(board: board)
+        var moves: [Move] = []
+        for transposed in [false, true] {
+            let generator = Generator(board: board, rack: rack, transposed: transposed)
+            generator.run { placement, word in
+                guard let score = scorer.score(placement) else { return }
+                moves.append(Move(placement: placement, word: word, score: score))
+            }
+        }
+        moves.sort { $0.score != $1.score ? $0.score > $1.score : $0.word < $1.word }
+        var seen = Set<String>()
+        var out: [Move] = []
+        for move in moves {
+            let coords = move.placement.keys
+            let horizontal = Set(coords.map(\.row)).count == 1
+            let key = "\(horizontal ? "h" : "v")-\(coords.map(\.row).min() ?? 0)-\(coords.map(\.col).min() ?? 0)"
+            guard seen.insert(key).inserted else { continue }
+            out.append(move)
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
     /// A legal move picked to match the difficulty, or nil if none exists.
     /// Difficulty never changes WHAT is legal — every candidate comes from
     /// the same generator — only which rank of candidate gets played:

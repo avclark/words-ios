@@ -29,12 +29,27 @@ cleanup() {
 trap cleanup EXIT
 
 step "1. Create throwaway user via admin API"
-USER_ID=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
-  -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"email_confirm\":true}" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') \
-  || fail "admin user creation (is the secret key right?)"
+# Retries like the later scripts' make_user: the auth gateway sometimes
+# resets a connection (curl exit 56) — one cold request must not fail the
+# whole run. Parse errors print nothing instead of a traceback.
+for attempt in 1 2 3; do
+  rc=0
+  OUT=$(curl -sf -X POST "$URL/auth/v1/admin/users" \
+    -H "apikey: $KEY" -H "Authorization: Bearer $KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"email_confirm\":true}") || rc=$?
+  USER_ID=$(printf '%s' "$OUT" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("id", ""))
+except Exception:
+    pass
+')
+  [ -n "$USER_ID" ] && break
+  echo "   create attempt $attempt failed (curl exit $rc) — retrying" >&2
+  sleep "$attempt"
+done
+[ -n "$USER_ID" ] || fail "admin user creation after 3 attempts (is the secret key right?)"
 echo "   user: $USER_ID"
 
 step "2. Signup trigger created a profile row"
@@ -69,9 +84,17 @@ step "6. User and profile are really gone"
 GONE_PROFILE=$(curl -sf "$URL/rest/v1/profiles?id=eq.$USER_ID&select=id" \
   -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
 [ "$GONE_PROFILE" = "[]" ] || fail "profile still exists: $GONE_PROFILE"
-GONE_USER=$(curl -s -o /dev/null -w '%{http_code}' "$URL/auth/v1/admin/users/$USER_ID" \
-  -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
-[ "$GONE_USER" = "404" ] || fail "auth user still exists (HTTP $GONE_USER)"
+# The auth gateway intermittently answers 403/resets under load (same
+# family as the exit-56 create flakes); only a repeated non-404 counts.
+GONE_USER=""
+for attempt in 1 2 3; do
+  GONE_USER=$(curl -s -o /dev/null -w '%{http_code}' "$URL/auth/v1/admin/users/$USER_ID" \
+    -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
+  [ "$GONE_USER" = "404" ] && break
+  echo "   user-gone check attempt $attempt got HTTP $GONE_USER — retrying" >&2
+  sleep "$attempt"
+done
+[ "$GONE_USER" = "404" ] || fail "auth user still exists (HTTP $GONE_USER after 3 attempts)"
 echo "   confirmed deleted"
 
 printf '\nALL CHECKS PASSED — server side is ready (Apple provider still separate).\n'
