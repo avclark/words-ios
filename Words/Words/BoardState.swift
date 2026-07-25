@@ -35,15 +35,23 @@ enum HintBudget {
     /// "Stage the best word" uses per game.
     static let bestWord = 5
     /// How many distinct positions the spots hint outlines (top N
-    /// positions best-first; the best one draws red, the rest green).
+    /// positions best-first; red = best, yellow = second best,
+    /// green = the rest).
     static let placementSpots = 12
 }
 
 /// One outlined hint region on the board (the cells a suggested word
-/// would occupy). `isBest` = the highest-scoring option (red outline).
+/// would occupy), ranked: the best-scoring option draws red, the
+/// second best yellow, everything else green.
 struct HintHighlight: Equatable {
+    enum Tier: Equatable {
+        case best, second, rest
+    }
     let coords: [BoardCoord]
-    let isBest: Bool
+    let tier: Tier
+    /// The highest-scoring option (kept as the stable name callers/tests
+    /// use for "the red one").
+    var isBest: Bool { tier == .best }
 }
 
 /// Whose turn it is. `.opponent` covers the whole time the other side holds
@@ -404,14 +412,20 @@ final class BoardState {
 
     /// Hint type 1 — outline where words can go. `moves` is best-first
     /// from AIPlayer.topMoves (computed off-main by the caller); the first
-    /// gets the "best" (red) outline. Spends one use only if something is
-    /// actually shown.
+    /// gets the "best" (red) outline, the second the runner-up (yellow),
+    /// the rest green. Fewer than three spots degrade naturally (one spot
+    /// = red only). Spends one use only if something is actually shown.
     func applyPlacementsHint(_ moves: [AIPlayer.Move]) {
         guard gameOver == nil, turnState == .local,
               hintPlacementsLeft > 0, !moves.isEmpty else { return }
         hintPlacementsUsed += 1
         hintHighlights = moves.enumerated().map { index, move in
-            HintHighlight(coords: Array(move.placement.keys), isBest: index == 0)
+            let tier: HintHighlight.Tier = switch index {
+            case 0: .best
+            case 1: .second
+            default: .rest
+            }
+            return HintHighlight(coords: Array(move.placement.keys), tier: tier)
         }
         autosave()
     }
@@ -476,38 +490,48 @@ final class BoardState {
 
     // MARK: - Playing a move
 
-    /// Attempt to play the current placement as a real move, enforcing every
-    /// rule in GAME-LOGIC-REFERENCE.md. On success the tiles commit, the score
-    /// banks, and the rack refills. On rejection the tiles stay on the board
-    /// and `status` explains why.
-    func playMove() {
-        guard gameOver == nil, turnState == .local, !placed.isEmpty else { return }
+    /// Verdict on the current tentative placement — THE one validation path
+    /// (line, contiguity, center/connection, dictionary, blank assigned).
+    /// Both playMove() and the Play button's enabled state consume this;
+    /// never write a second validation (one-validation-path principle,
+    /// same spirit as the one-coordinate-path rule).
+    enum PlacementVerdict: Equatable {
+        /// Fully legal: the words it forms (main word first), the CELLS of
+        /// that main word (for the green playable outline — in run order,
+        /// start → end), and the move's total score.
+        case playable(words: [String], mainWord: [BoardCoord], score: Int)
+        /// Not (yet) legal, with the player-facing reason.
+        case notPlayable(reason: String)
+    }
+
+    /// Evaluate the current placement against every rule in
+    /// GAME-LOGIC-REFERENCE.md WITHOUT committing anything. Pure query:
+    /// no state is touched, so the UI may call it on every change.
+    func evaluatePlacement() -> PlacementVerdict {
+        guard !placed.isEmpty else {
+            return .notPlayable(reason: "Place at least one tile")
+        }
         guard pendingBlank == nil else {
-            status = .rejected("Pick a letter for the blank tile first")
-            return
+            return .notPlayable(reason: "Pick a letter for the blank tile first")
         }
 
         let horizontal: Bool
         switch scorer.placementLine(placed) {
         case .notALine:
-            status = .rejected("Tiles must be in a single row or column")
-            return
+            return .notPlayable(reason: "Tiles must be in a single row or column")
         case .gapped:
-            status = .rejected("Your word can't have gaps")
-            return
+            return .notPlayable(reason: "Your word can't have gaps")
         case .ok(let h):
             horizontal = h
         }
 
         if committed.isEmpty {
             guard placed[.center] != nil else {
-                status = .rejected("The first word must cover the center square")
-                return
+                return .notPlayable(reason: "The first word must cover the center square")
             }
         } else {
             guard touchesCommitted() else {
-                status = .rejected("Your word must connect to a tile on the board")
-                return
+                return .notPlayable(reason: "Your word must connect to a tile on the board")
             }
         }
 
@@ -522,20 +546,39 @@ final class BoardState {
             if cross.count > 1 { formed.append(cross) }
         }
         guard !formed.isEmpty else {
-            status = .rejected("Words need at least two letters")
-            return
+            return .notPlayable(reason: "Words need at least two letters")
         }
 
         let wordsFormed = formed.map { scorer.string(for: $0, placement: placed) }
         let invalid = wordsFormed.filter { !Lexicon.contains($0) }
         guard invalid.isEmpty else {
-            status = .rejected("Not in dictionary: \(invalid.joined(separator: ", "))")
-            return
+            return .notPlayable(reason: "Not in dictionary: \(invalid.joined(separator: ", "))")
         }
 
         guard let score = currentScore() else {
-            status = .rejected("Invalid placement")
+            return .notPlayable(reason: "Invalid placement")
+        }
+        return .playable(words: wordsFormed, mainWord: formed[0], score: score)
+    }
+
+    /// Attempt to play the current placement as a real move, enforcing every
+    /// rule in GAME-LOGIC-REFERENCE.md via evaluatePlacement(). On success
+    /// the tiles commit, the score banks, and the rack refills. On rejection
+    /// the tiles stay on the board and `status` explains why — normally
+    /// unreachable now that the Play button disables itself, but kept as
+    /// the honest fallback.
+    func playMove() {
+        guard gameOver == nil, turnState == .local, !placed.isEmpty else { return }
+
+        let wordsFormed: [String]
+        let score: Int
+        switch evaluatePlacement() {
+        case .notPlayable(let reason):
+            status = .rejected(reason)
             return
+        case .playable(let words, _, let s):
+            wordsFormed = words
+            score = s
         }
 
         let placement = placed

@@ -7,6 +7,11 @@ struct BoardView: View {
     let state: BoardState
     let drag: DragController
     let metrics: BoardMetrics
+    /// The one evaluatePlacement() verdict, computed by GameView per body
+    /// evaluation and shared with the Play button — the green word outline
+    /// and the score chip/badge below derive from THIS, never from a
+    /// second validity check.
+    let verdict: BoardState.PlacementVerdict
     /// Phase 12 tap-to-define: a committed (played) tile was tapped.
     var onTapCommitted: ((BoardCoord) -> Void)? = nil
 
@@ -25,6 +30,7 @@ struct BoardView: View {
             .padding(metrics.padding)
 
             hintOutlines
+            playableWordOutline
             hoverHighlight
             scoreChip
         }
@@ -61,14 +67,12 @@ struct BoardView: View {
                     // empty square. Their TAPS are caught by the cell
                     // below (tap-to-define) — a tap never moves anything,
                     // so the drag invariants are untouched.
+                    // Fresh tiles have NO tap action on purpose: tapping a
+                    // pending tile used to recall it, which fired
+                    // constantly while rearranging tiles on the board.
+                    // Moving a pending tile is a drag; recalling is the
+                    // Recall button (or a drag back to the rack).
                     .allowsHitTesting(fresh)
-                    .onTapGesture {
-                        guard fresh else { return }
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            state.returnToRack(from: coord)
-                        }
-                        drag.refreshZoom(state: state)
-                    }
                     .gesture(boardTileDrag(coord)) // no-ops on committed tiles
             }
         }
@@ -106,23 +110,33 @@ struct BoardView: View {
     // MARK: - Overlays
 
     /// Phase 12 hint type 1: outlines around the cells each suggested
-    /// word would occupy — red for the best-scoring option, green for the
-    /// rest. Hit-test-disabled overlay; the board underneath is untouched.
+    /// word would occupy — red for the best-scoring option, yellow for
+    /// the second best, green for the rest. Hit-test-disabled overlay;
+    /// the board underneath is untouched.
     @ViewBuilder
     private var hintOutlines: some View {
         ForEach(Array(state.hintHighlights.enumerated()), id: \.offset) { _, highlight in
-            let tint: Color = highlight.isBest ? .red : .green
+            let style = outlineStyle(for: highlight.tier)
             ForEach(highlight.coords, id: \.self) { coord in
                 let origin = metrics.cellOrigin(coord)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(tint.opacity(highlight.isBest ? 0.95 : 0.7),
-                                  lineWidth: highlight.isBest ? 2.5 : 1.5)
+                    .strokeBorder(style.tint.opacity(style.opacity),
+                                  lineWidth: style.lineWidth)
                     .frame(width: metrics.cellSize, height: metrics.cellSize)
                     .offset(x: origin.x, y: origin.y)
                     .allowsHitTesting(false)
             }
         }
         .transition(.opacity)
+    }
+
+    private func outlineStyle(for tier: HintHighlight.Tier)
+        -> (tint: Color, opacity: Double, lineWidth: CGFloat) {
+        switch tier {
+        case .best:   (.red, 0.95, 2.5)
+        case .second: (.yellow, 0.85, 2.0)
+        case .rest:   (.green, 0.7, 1.5)
+        }
     }
 
     @ViewBuilder
@@ -142,29 +156,69 @@ struct BoardView: View {
         }
     }
 
-    /// Live score bubble hovering above the current placement, like
-    /// Scrabble GO's. Grey when the placement isn't a scorable line.
+    /// Green outline around the main word once the placement is a legal
+    /// move — same presentation-only mechanism as the hint outlines
+    /// (hit-test-disabled overlay; the board and any live drag are
+    /// untouched). One rounded rect spanning the word's run.
+    @ViewBuilder
+    private var playableWordOutline: some View {
+        if drag.active == nil,
+           case .playable(_, let mainWord, _) = verdict,
+           let first = mainWord.first, let last = mainWord.last {
+            let o1 = metrics.cellOrigin(first)
+            let o2 = metrics.cellOrigin(last)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.green.opacity(0.9), lineWidth: 2.5)
+                .frame(width: o2.x - o1.x + metrics.cellSize,
+                       height: o2.y - o1.y + metrics.cellSize)
+                .offset(x: o1.x, y: o1.y)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+        }
+    }
+
+    /// The ONE score element, driven by the shared verdict:
+    /// while building (not yet playable) it's the neutral running chip
+    /// hovering above the placement, exactly as before; once the placement
+    /// is a legal move it becomes a green total badge anchored to the END
+    /// of the formed word ("this is playable, here's what it scores").
     @ViewBuilder
     private var scoreChip: some View {
         if !state.placed.isEmpty, drag.active == nil {
-            let coords = state.placed.keys
-            let minRow = coords.map(\.row).min() ?? 7
-            let cols = coords.filter { $0.row == minRow }.map(\.col)
-            let midCol = cols.sorted()[cols.count / 2]
-            let anchor = metrics.cellCenter(BoardCoord(row: minRow, col: midCol))
-            let score = state.currentScore()
+            if case .playable(_, let mainWord, let score) = verdict,
+               let end = mainWord.last {
+                let anchor = metrics.cellCenter(end)
+                Text("+\(score)")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.green))
+                    .position(x: min(anchor.x + metrics.cellSize * 0.9,
+                                     metrics.side - 18),
+                              y: max(14, anchor.y - metrics.cellSize * 0.9))
+                    .transition(.scale.combined(with: .opacity))
+                    .allowsHitTesting(false)
+            } else {
+                let coords = state.placed.keys
+                let minRow = coords.map(\.row).min() ?? 7
+                let cols = coords.filter { $0.row == minRow }.map(\.col)
+                let midCol = cols.sorted()[cols.count / 2]
+                let anchor = metrics.cellCenter(BoardCoord(row: minRow, col: midCol))
+                let score = state.currentScore()
 
-            Text(score.map { "+\($0)" } ?? "—")
-                .font(.system(size: 15, weight: .heavy, design: .rounded))
-                .foregroundStyle(score == nil ? Color.white.opacity(0.6) : .black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule().fill(score == nil ? Color.white.opacity(0.2) : Color.yellow)
-                )
-                .position(x: anchor.x, y: max(14, anchor.y - metrics.cellSize * 1.1))
-                .transition(.scale.combined(with: .opacity))
-                .allowsHitTesting(false)
+                Text(score.map { "+\($0)" } ?? "—")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+                    .foregroundStyle(score == nil ? Color.white.opacity(0.6) : .black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(score == nil ? Color.white.opacity(0.2) : Color.yellow)
+                    )
+                    .position(x: anchor.x, y: max(14, anchor.y - metrics.cellSize * 1.1))
+                    .transition(.scale.combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
         }
     }
 }

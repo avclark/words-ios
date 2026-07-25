@@ -74,6 +74,10 @@ struct ReviewView: View {
         }
         .task {
             reviewLog.notice("ReviewView task START")
+            // Definitions back the missed-word lines; normally warmed at
+            // game open, this is a harmless belt-and-braces for a review
+            // opened straight from a cold lobby restore.
+            Definitions.warmUp()
             await engine.run()
         }
     }
@@ -180,6 +184,24 @@ struct ReviewView: View {
                             .font(.system(size: 12, design: .rounded))
                             .foregroundStyle(turn.foundBest ? Color.green.opacity(0.85)
                                              : .white.opacity(0.5))
+                        // The word you missed, defined — same bundled
+                        // source and lookup path as tap-to-define, incl.
+                        // inflections; ENABLE-only words say so honestly.
+                        if let word = missedBestWord(turn) {
+                            if let definition = Definitions.lookup(word) {
+                                Text(definition.components(separatedBy: " | ").first ?? definition)
+                                    .font(.system(size: 11, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.4))
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
+                            } else {
+                                Text("A valid word — no definition in our dictionary.")
+                                    .font(.system(size: 11, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.35))
+                                    .italic()
+                            }
+                        }
                     }
                     Spacer()
                     if turn.foundBest {
@@ -255,6 +277,14 @@ struct ReviewView: View {
             return "Best available: \(best) for \(turn.bestScore)"
         }
         return "No play was possible"
+    }
+
+    /// The best word the player COULD have played but didn't — the one
+    /// whose definition the row shows. Nil when the turn was the best
+    /// play (nothing was missed) or no best play is known.
+    private func missedBestWord(_ turn: ReviewEngine.TurnReview) -> String? {
+        guard !turn.foundBest, !turn.rackUnknown else { return nil }
+        return turn.bestWord
     }
 }
 

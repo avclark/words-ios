@@ -95,11 +95,12 @@ already produces every legal candidate, ranked by score). No currency, no XP,
 no purchases.
 
 - **Hint type 1 — Show playable locations** (built, Phase 12): outlines
-  where words can be played from the current rack — green for valid spots,
-  red for the best-scoring one. Does NOT place tiles. Capping decision:
-  top 12 DISTINCT positions (start cell + orientation, best word per
-  position) — dedup-by-position is what kills the visual soup
-  (HintBudget.placementSpots).
+  where words can be played from the current rack — red for the
+  best-scoring spot, yellow for the second best, green for the rest
+  (fewer spots degrade naturally: 1 = red, 2 = red + yellow). Does NOT
+  place tiles. Capping decision: top 12 DISTINCT positions (start cell +
+  orientation, best word per position) — dedup-by-position is what kills
+  the visual soup (HintBudget.placementSpots).
 - **Hint type 2 — Show best word** (built, Phase 12): stages the tiles of
   the highest-scoring play on the board. Does NOT commit — play it, recall
   it, or do something else.

@@ -38,8 +38,18 @@ final class DragController {
     /// Tiny lift so the tile reads as "picked up" while staying under the
     /// finger, per Scrabble GO. Tuning knob.
     static let liftOffset = CGSize(width: 0, height: -12)
-    /// Floating tile size — constant and finger-sized, like v1. Tuning knob.
-    static let floatingSize: CGFloat = 54
+    /// Dragged-tile footprint, in BOARD CELLS, per zoom state — the
+    /// floating tile is sized as cellSize × this, so it tracks the board
+    /// metrics instead of a hardcoded point value. Tuning knobs: bigger
+    /// while zoomed out (small cells need a readable tile), tighter while
+    /// zoomed in. Zoomed-in 2.3 reproduces the original fixed 54pt on the
+    /// phone-class board (cellSize ≈ 23pt) — that size was already right;
+    /// zoomed-out is ~1.3× that, the one to tune on device.
+    static let floatingCellsZoomedOut: CGFloat = 3.0
+    static let floatingCellsZoomedIn: CGFloat = 2.3
+    /// Fallback size for the (theoretical) drag before the first board
+    /// layout has reported metrics — the old fixed size.
+    static let floatingSizeFallback: CGFloat = 54
     /// The single zoomed-in level. There are no other zoom states.
     static let placementZoom: CGFloat = 1.7
     /// Pan momentum: how far the board coasts after a flick, as points of
@@ -70,7 +80,16 @@ final class DragController {
         )
     }
 
-    var floatingSize: CGFloat { Self.floatingSize }
+    /// Floating tile size for the CURRENT zoom state, derived from the
+    /// live board metrics (cellSize × the footprint constants above).
+    /// Presentation only — hit-testing stays on `visualCenter`, so this
+    /// never touches the coordinate path.
+    var floatingSize: CGFloat {
+        guard metrics.cellSize > 0 else { return Self.floatingSizeFallback }
+        let cells = isZoomedIn ? Self.floatingCellsZoomedIn
+                               : Self.floatingCellsZoomedOut
+        return metrics.cellSize * cells
+    }
 
     // MARK: - Tile drag entry points
 

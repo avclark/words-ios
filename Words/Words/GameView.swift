@@ -16,6 +16,7 @@ struct GameView: View {
     @State private var drag = DragController()
     @State private var showSwapSheet = false
     @State private var confirmingResign = false
+    @State private var confirmingPass = false
     @State private var pingFeedback: String?
     @State private var chat: ChatStore?
     @State private var channel: GameChannel?
@@ -45,6 +46,10 @@ struct GameView: View {
             // VStack overflow leading-aligned, shifting the whole layout off-center.
             // 90 = outer padding (24) + rack inner padding (24) + 6 gaps × 7.
             let rackTile = min(46, (geo.size.width - 90) / 7)
+            // THE placement verdict — computed once per body evaluation and
+            // shared by the board (green word outline + score badge) and the
+            // Play button. One validation path; nothing below re-checks.
+            let verdict = state.evaluatePlacement()
 
             VStack(spacing: 14) {
                 GameHeaderView(local: state.localPlayer,
@@ -68,6 +73,7 @@ struct GameView: View {
                 Spacer(minLength: 0)
 
                 BoardView(state: state, drag: drag, metrics: metrics,
+                          verdict: verdict,
                           onTapCommitted: { coord in
                               let words = state.committedWords(through: coord)
                               guard !words.isEmpty else { return }
@@ -88,7 +94,7 @@ struct GameView: View {
                     .padding(.horizontal, 12)
 
                 if state.gameOver == nil {
-                    actionBar
+                    actionBar(verdict: verdict)
                 } else {
                     finishedBar
                 }
@@ -327,8 +333,9 @@ struct GameView: View {
         return nil
     }
 
-    private var actionBar: some View {
-        HStack(spacing: 6) {
+    private func actionBar(verdict: BoardState.PlacementVerdict) -> some View {
+        let playEnabled = canPlay(verdict)
+        return HStack(spacing: 6) {
             ActionButton(icon: "shuffle", label: "Shuffle") {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
                     state.shuffleRack()
@@ -341,17 +348,17 @@ struct GameView: View {
                 }
                 drag.refreshZoom(state: state)
             } label: {
-                Text(playLabel)
+                Text(playLabel(verdict))
                     .font(.system(size: 16, weight: .heavy, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .foregroundStyle(canPlay ? .black : .white.opacity(0.4))
+                    .foregroundStyle(playEnabled ? .black : .white.opacity(0.4))
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background(
-                        Capsule().fill(canPlay ? Color.yellow : Color.white.opacity(0.12))
+                        Capsule().fill(playEnabled ? Color.yellow : Color.white.opacity(0.12))
                     )
             }
-            .disabled(!canPlay)
+            .disabled(!playEnabled)
 
             ActionButton(icon: "arrow.uturn.backward", label: "Recall") {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
@@ -369,15 +376,27 @@ struct GameView: View {
             .opacity(state.bagRemaining == 0 ? 0.4 : 1)
 
             ActionButton(icon: "forward.end", label: "Pass") {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
-                    state.passTurn()
-                }
-                drag.refreshZoom(state: state)
+                confirmingPass = true
             }
             .disabled(state.waitingForOpponent || state.gameOver != nil)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
+        // A pass is too easy to hit by accident for a single tap — confirm
+        // first, same pattern as Resign.
+        .confirmationDialog("Pass your turn?",
+                            isPresented: $confirmingPass,
+                            titleVisibility: .visible) {
+            Button("Pass") {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    state.passTurn()
+                }
+                drag.refreshZoom(state: state)
+            }
+            Button("Keep playing", role: .cancel) {}
+        } message: {
+            Text("You'll give up this turn without playing. Six passes in a row end the game.")
+        }
         .sheet(isPresented: $showSwapSheet) {
             SwapView(rack: state.rack, bagCount: state.bagRemaining) { ids in
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
@@ -523,12 +542,21 @@ struct GameView: View {
         }
     }
 
-    private var canPlay: Bool {
-        state.currentScore() != nil && state.pendingBlank == nil && !state.waitingForOpponent
+    /// The Play button is genuinely disabled until the placement is a fully
+    /// legal move (line, contiguity, center/connection, dictionary) — the
+    /// SAME evaluatePlacement() verdict computed once in body and shared
+    /// with the board's green outline/badge, so the button and the rules
+    /// can never disagree. The rejection-message path in playMove() stays
+    /// as a fallback but is unreachable in normal use.
+    private func canPlay(_ verdict: BoardState.PlacementVerdict) -> Bool {
+        guard case .playable = verdict else { return false }
+        return !state.waitingForOpponent
     }
 
-    private var playLabel: String {
-        if let score = state.currentScore() { return "PLAY  +\(score)" }
+    private func playLabel(_ verdict: BoardState.PlacementVerdict) -> String {
+        if case .playable(_, _, let score) = verdict {
+            return "PLAY  +\(score)"
+        }
         return "PLAY"
     }
 
