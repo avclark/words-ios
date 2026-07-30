@@ -32,6 +32,7 @@ struct GameView: View {
     @State private var hintNotice: String?
     @State private var definitionRequest: DefinitionRequest?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.theme) private var theme
 
     var body: some View {
         // Diagnostic: GameView body evaluations around the chat-open window.
@@ -80,7 +81,7 @@ struct GameView: View {
                               definitionRequest = DefinitionRequest(words: words)
                           })
                     .frame(width: metrics.side, height: metrics.side)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: theme.metrics.boardCornerRadius, style: .continuous))
                     .contentShape(Rectangle())
                     // Pan the zoomed board by dragging empty squares.
                     // Tile drags are child gestures, so they win on tiles.
@@ -101,7 +102,7 @@ struct GameView: View {
             }
             .padding(.top, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(red: 0.05, green: 0.07, blue: 0.13).ignoresSafeArea())
+            .background(theme.chrome.screenBackground.ignoresSafeArea())
             .overlay(alignment: .topLeading) { floatingTile }
             // The takeover plays ABOVE everything as a hit-test-disabled
             // overlay: a live drag underneath continues undisturbed
@@ -191,15 +192,15 @@ struct GameView: View {
                     onExit?()
                 }
                 .presentationDetents([.large])
-                .presentationBackground(HomeView.background)
+                .presentationBackground(theme.chrome.screenBackground)
             } else {
                 // chat is created at game open, so this is theoretical —
                 // but a sheet must never render as pure emptiness.
                 ProgressView()
-                    .tint(.white.opacity(0.5))
+                    .tint(theme.chrome.ink.opacity(0.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .presentationDetents([.large])
-                    .presentationBackground(HomeView.background)
+                    .presentationBackground(theme.chrome.screenBackground)
                     .onAppear { chatLog.notice("sheet NIL-BRANCH visible (fallback spinner)") }
             }
         }
@@ -228,10 +229,10 @@ struct GameView: View {
                 // emptiness, and hitting this branch would itself be the
                 // diagnosis.
                 ProgressView()
-                    .tint(.white.opacity(0.5))
+                    .tint(theme.chrome.ink.opacity(0.5))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .presentationDetents([.large])
-                    .presentationBackground(HomeView.background)
+                    .presentationBackground(theme.chrome.screenBackground)
                     .onAppear { reviewLog.notice("review sheet NIL-BRANCH visible (fallback spinner)") }
             }
         }
@@ -349,13 +350,15 @@ struct GameView: View {
                 drag.refreshZoom(state: state)
             } label: {
                 Text(playLabel(verdict))
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .font(theme.typography.buttonLabel)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .foregroundStyle(playEnabled ? .black : .white.opacity(0.4))
+                    .foregroundStyle(playEnabled ? theme.chrome.buttonPrimaryText
+                                                 : theme.chrome.ink.opacity(0.4))
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background(
-                        Capsule().fill(playEnabled ? Color.yellow : Color.white.opacity(0.12))
+                        Capsule().fill(playEnabled ? theme.chrome.buttonPrimary
+                                                   : theme.chrome.ink.opacity(0.12))
                     )
             }
             .disabled(!playEnabled)
@@ -417,7 +420,7 @@ struct GameView: View {
             .opacity(hintWorking ? 0 : 1)
             if hintWorking {
                 ProgressView()
-                    .tint(.yellow)
+                    .tint(theme.chrome.accent)
             }
         }
         .disabled(state.waitingForOpponent || state.gameOver != nil
@@ -445,10 +448,10 @@ struct GameView: View {
                 onNewGame?()
             } label: {
                 Text(state.opponentIsHuman ? "REMATCH" : "NEW GAME")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.black)
+                    .font(theme.typography.buttonLabel)
+                    .foregroundStyle(theme.chrome.buttonPrimaryText)
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(Capsule().fill(Color.yellow))
+                    .background(Capsule().fill(theme.chrome.buttonPrimary))
             }
         }
         .padding(.horizontal, 12)
@@ -570,7 +573,7 @@ struct GameView: View {
                 // which sits directly under the finger (Scrabble GO-style).
                 .opacity(active.isSettling ? 0.9 : 0.72)
                 .scaleEffect(active.isSettling ? 0.85 : 1.0)
-                .shadow(color: .black.opacity(0.35), radius: 8, y: 5)
+                .shadow(color: theme.tile.shadowColor, radius: 8, y: 5)
                 .position(center)
                 .animation(.spring(response: 0.22, dampingFraction: 0.8), value: drag.floatingSize)
                 .allowsHitTesting(false)
@@ -629,6 +632,8 @@ struct GameView: View {
 }
 
 private struct ActionButton: View {
+    @Environment(\.theme) private var theme
+
     let icon: String
     let label: String
     let action: () -> Void
@@ -641,11 +646,11 @@ private struct ActionButton: View {
                 Text(label)
                     .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(.white.opacity(0.8))
+            .foregroundStyle(theme.chrome.ink.opacity(0.8))
             .frame(width: 52, height: 50)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
+                RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                    .fill(theme.chrome.ink.opacity(0.08))
             )
         }
     }

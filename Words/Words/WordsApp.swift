@@ -5,12 +5,23 @@ import Supabase
 struct WordsApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// THE theme switch: reassigning this re-renders the whole tree with
+    /// the new theme. Views never receive a theme any other way.
+    @State private var theme: any Theme = DefaultTheme()
+
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environment(\.theme, theme)
                 .preferredColorScheme(.dark)
         }
     }
+}
+
+/// The four root tabs. The game screen is NOT a tab — it presents above
+/// the whole shell (full screen, no tab bar) while a game is open.
+enum AppTab: Hashable {
+    case home, friends, leaderboard, profile
 }
 
 /// Top-level flow: auth gate → lobby → game. Owns the per-account session
@@ -35,10 +46,11 @@ struct RootView: View {
     /// game" launch state — never shown on a normal launch.
     @State private var openingNotificationGame = false
     @State private var openFailure: String?
-    /// Friends sheet visibility lives here so a friend-notification tap
-    /// can open it (HomeView presents it via binding).
-    @State private var showFriendsSheet = false
+    /// Root tab selection — owned here so notification deep-links can
+    /// switch tabs (a friend-request tap lands on the Friends tab).
+    @State private var selectedTab: AppTab = .home
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.theme) private var theme
 
     private static let pendingInviteKey = "pendingInviteToken"
     private static let pushPromptedKey = "pushPermissionPrompted"
@@ -108,8 +120,15 @@ struct RootView: View {
         .onChange(of: notifications.pendingFriendsOpen) { _, pending in
             guard pending, store != nil else { return }
             notifications.pendingFriendsOpen = false
-            activeGame = nil        // friends sheet lives on the lobby
-            showFriendsSheet = true
+            activeGame = nil        // the tab shell lives under the game
+            selectedTab = .friends
+        }
+        // Profile edits push from wherever they happen (Home header or the
+        // Profile tab) — the onChange lives here, above the tabs, so a
+        // background tab's edit still syncs.
+        .onChange(of: profile) { _, newValue in
+            LocalProfile.save(newValue)
+            schedulePushProfile(newValue)
         }
         .alert("Never miss your turn", isPresented: $offeringPushPermission) {
             Button("Enable notifications") {
@@ -230,13 +249,15 @@ struct RootView: View {
     private var loadingScreen: some View {
         ProgressView()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(HomeView.background.ignoresSafeArea())
+            .background(theme.chrome.screenBackground.ignoresSafeArea())
     }
 
     @ViewBuilder
     private var gameContent: some View {
         if let store, let friends {
             if let activeGame {
+                // The game presents ABOVE the tab shell: a plain view swap
+                // (never a modal presentation), full screen, no tab bar.
                 GameView(state: activeGame,
                          onExit: { closeActiveGame() },
                          onNewGame: { rematch() },
@@ -248,19 +269,53 @@ struct RootView: View {
                     // (drag controller, sheets) resets fully.
                     .id(activeGame.gameID)
             } else {
-                HomeView(profile: $profile,
-                         store: store,
-                         auth: auth,
-                         friends: friends,
-                         showFriends: $showFriendsSheet,
-                         onOpen: { open($0) },
-                         onNewGame: { start(difficulty: $0) },
-                         onChallenge: { challenge($0) })
-                    .onChange(of: profile) { _, newValue in
-                        LocalProfile.save(newValue)
-                        schedulePushProfile(newValue)
-                    }
+                TabView(selection: $selectedTab) {
+                    tabStyled(
+                        HomeView(profile: $profile,
+                                 store: store,
+                                 friends: friends,
+                                 onShowFriends: { selectedTab = .friends },
+                                 onShowProfile: { selectedTab = .profile },
+                                 onOpen: { open($0) },
+                                 onNewGame: { start(difficulty: $0) },
+                                 onChallenge: { challenge($0) })
+                    )
+                    .tabItem { Label("Home", systemImage: "house.fill") }
+                    .tag(AppTab.home)
+
+                    tabStyled(
+                        FriendsView(store: friends, isTab: true) { challenge($0) }
+                    )
+                    .tabItem { Label("Friends", systemImage: "person.2.fill") }
+                    .tag(AppTab.friends)
+
+                    tabStyled(
+                        LeaderboardView(store: friends)
+                    )
+                    .tabItem { Label("Leaderboard", systemImage: "trophy.fill") }
+                    .tag(AppTab.leaderboard)
+
+                    tabStyled(
+                        ProfileEditorSheet(profile: $profile, auth: auth, isTab: true)
+                    )
+                    .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
+                    .tag(AppTab.profile)
+                }
+                .tint(theme.chrome.accent)
             }
+        }
+    }
+
+    /// Tab bar styling comes from the theme: nil = the system-default
+    /// treatment (the current look); a theme may pin an explicit bar color.
+    @ViewBuilder
+    private func tabStyled(_ content: some View) -> some View {
+        if let bar = theme.chrome.tabBarBackground {
+            content
+                .toolbarBackground(bar, for: .tabBar)
+                .toolbarBackground(.visible, for: .tabBar)
+        } else {
+            content
         }
     }
 
@@ -268,6 +323,7 @@ struct RootView: View {
 
     private func sessionDidChange(userID: UUID?) {
         activeGame = nil
+        selectedTab = .home
         guard let userID else {
             store = nil
             sync = nil
@@ -469,18 +525,20 @@ struct RootView: View {
 /// while session restore + the game fetch finish, so the tap reads as
 /// "opening your game", not "wrong screen, then right screen".
 private struct OpeningGameView: View {
+    @Environment(\.theme) private var theme
+
     var body: some View {
         VStack(spacing: 20) {
             Text("WORDS")
-                .font(.system(size: 30, weight: .black, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
+                .font(theme.typography.font(30, .black))
+                .foregroundStyle(theme.chrome.textPrimary)
             ProgressView()
-                .tint(.white.opacity(0.6))
+                .tint(theme.chrome.ink.opacity(0.6))
             Text("Opening your game…")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.55))
+                .font(theme.typography.font(14, .semibold))
+                .foregroundStyle(theme.chrome.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
     }
 }

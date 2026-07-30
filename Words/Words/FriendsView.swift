@@ -95,34 +95,38 @@ final class FriendsStore {
 
 /// Friends screen: invite link (primary), username search (backstop),
 /// pending requests both ways, and the friends list with challenge.
-/// Minimal styling — design pass later.
+/// People-management only — the leaderboard lives in its own tab
+/// (LeaderboardView). Minimal styling — design pass later.
 struct FriendsView: View {
+    @Environment(\.theme) private var theme
+
     let store: FriendsStore
+    /// True when shown as a root tab (no Done button — nothing to dismiss).
+    var isTab: Bool = false
     let onChallenge: (RemoteGames.FriendDTO) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var searchTask: Task<Void, Never>?
     @State private var removalCandidate: RemoteGames.FriendDTO?
-    /// Phase 13: tapping a leaderboard row opens the head-to-head record.
-    @State private var headToHeadFriend: RemoteGames.FriendDTO?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("FRIENDS")
-                    .font(.system(size: 20, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(theme.typography.font(20, .black))
+                    .foregroundStyle(theme.chrome.ink)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                if !isTab {
+                    Button("Done") { dismiss() }
+                        .font(theme.typography.font(14, .semibold))
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    leaderboardSection
                     inviteSection
                     searchSection
                     if !store.incoming.isEmpty {
@@ -155,8 +159,8 @@ struct FriendsView: View {
                     section("FRIENDS") {
                         if store.friends.isEmpty {
                             Text("No friends yet — share your invite link to get started.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.4))
+                                .font(theme.typography.body)
+                                .foregroundStyle(theme.chrome.ink.opacity(0.4))
                                 .padding(.vertical, 8)
                         }
                         ForEach(store.friends) { user in
@@ -172,7 +176,7 @@ struct FriendsView: View {
                                         }
                                     } label: {
                                         Image(systemName: "ellipsis")
-                                            .foregroundStyle(.white.opacity(0.5))
+                                            .foregroundStyle(theme.chrome.ink.opacity(0.5))
                                             .frame(width: 28, height: 28)
                                     }
                                 }
@@ -184,7 +188,7 @@ struct FriendsView: View {
                 .padding(.bottom, 24)
             }
         }
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .task {
             await store.loadInviteLink()
             await store.refresh()
@@ -207,97 +211,6 @@ struct FriendsView: View {
         } message: {
             Text("Games you're currently playing continue (with their chat), but you won't be able to start new games or rematch unless you become friends again. To cut off all contact instead, use Block from a game's chat.")
         }
-        .sheet(item: $headToHeadFriend) { friend in
-            HeadToHeadSheet(friend: friend)
-        }
-    }
-
-    // MARK: - Leaderboard (Phase 13)
-
-    /// Friends-only by construction: the server returns me + accepted
-    /// friends, nothing else. Ranked on win rate over human games with a
-    /// minimum-games floor (see Leaderboard); tapping a friend's row
-    /// opens the head-to-head record.
-    @ViewBuilder
-    private var leaderboardSection: some View {
-        section("LEADERBOARD") {
-            if let entries = store.leaderboard {
-                if store.friends.isEmpty {
-                    Text("Your leaderboard starts with your first friend — share your invite link below.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .padding(.vertical, 6)
-                } else {
-                    let (ranked, unranked) = Leaderboard.ordered(entries)
-                    ForEach(Array(ranked.enumerated()), id: \.element.id) { index, entry in
-                        leaderboardRow(entry, rank: index + 1)
-                    }
-                    ForEach(unranked) { entry in
-                        leaderboardRow(entry, rank: nil)
-                    }
-                    Text("Ranked by win rate against humans, after \(Leaderboard.rankingFloor) finished games. Robo doesn't count here.")
-                        .font(.system(size: 10, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.3))
-                }
-            } else if store.leaderboardFailed {
-                HStack {
-                    Text("Couldn't load the leaderboard.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
-                    Button("Try again") {
-                        Task { await store.refreshLeaderboard() }
-                    }
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                }
-            } else {
-                ProgressView()
-                    .tint(.white.opacity(0.4))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-        }
-    }
-
-    private func leaderboardRow(_ entry: RemoteGames.LeaderboardEntry, rank: Int?) -> some View {
-        Button {
-            // My own row has no head-to-head; friends' rows open ours.
-            guard !entry.me,
-                  let friend = store.friends.first(where: { $0.userID == entry.userID })
-            else { return }
-            headToHeadFriend = friend
-        } label: {
-            HStack(spacing: 10) {
-                Text(rank.map { "#\($0)" } ?? "—")
-                    .font(.system(size: 13, weight: .heavy, design: .rounded))
-                    .foregroundStyle(rank == 1 ? Color.yellow : .white.opacity(0.4))
-                    .frame(width: 30, alignment: .leading)
-                AvatarCircle(avatar: Avatar(rawValue: entry.avatar ?? "") ?? .star, size: 32)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.me ? "You" : (entry.displayName ?? "Player"))
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(entry.me ? 1 : 0.9))
-                    if rank == nil {
-                        let needed = Leaderboard.rankingFloor - entry.stats.human.games
-                        Text("\(needed) more game\(needed == 1 ? "" : "s") to rank")
-                            .font(.system(size: 10, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.35))
-                    }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(entry.stats.human.wins)–\(entry.stats.human.losses)")
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.9))
-                    Text("\(winRateText(wins: entry.stats.human.wins, losses: entry.stats.human.losses)) · avg \(entry.stats.human.avgScore)")
-                        .font(.system(size: 10, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-            }
-            .padding(10)
-            .opacity(rank == nil ? 0.6 : 1)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(entry.me ? 0.09 : 0.06)))
-        }
     }
 
     private var inviteSection: some View {
@@ -308,18 +221,18 @@ struct FriendsView: View {
                     HStack {
                         Image(systemName: "link")
                         Text("Share my invite link")
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .font(theme.typography.font(15, .semibold))
                         Spacer()
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .foregroundStyle(.black)
+                    .foregroundStyle(theme.chrome.buttonPrimaryText)
                     .padding(14)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.yellow))
+                    .background(RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                        .fill(theme.chrome.buttonPrimary))
                 }
                 Text("Anyone who opens your link becomes your friend. Links last 30 days.")
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .font(theme.typography.font(11, .regular))
+                    .foregroundStyle(theme.chrome.textMuted)
             } else {
                 ProgressView().padding(8)
             }
@@ -342,8 +255,8 @@ struct FriendsView: View {
                 }
             if store.searchCameUpEmpty {
                 Text("No one found matching that.")
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(theme.typography.font(12, .regular))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
             }
             ForEach(store.searchResults) { user in
                 row(user) {
@@ -353,12 +266,12 @@ struct FriendsView: View {
             // Your own searchability, stated where search lives.
             if let mine = store.myUsername {
                 Text("Friends can find you by your name or @\(mine).")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
             } else {
                 Text("Friends can find you by your name. A username adds an exact handle — set one from your profile if you want one.")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
             }
         }
     }
@@ -371,12 +284,12 @@ struct FriendsView: View {
         switch user.state {
         case "friend":
             Text("Friends ✓")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.4))
+                .font(theme.typography.font(12, .semibold))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
         case "outgoing":
             Text("Requested")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.4))
+                .font(theme.typography.font(12, .semibold))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
         case "incoming":
             smallButton("Accept", prominent: true) {
                 Task { await store.respond(to: user, accept: true) }
@@ -391,9 +304,9 @@ struct FriendsView: View {
     private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .font(theme.typography.sectionTitle)
                 .kerning(1)
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
             content()
         }
     }
@@ -404,31 +317,33 @@ struct FriendsView: View {
             AvatarCircle(avatar: Avatar(rawValue: user.avatar ?? "") ?? .star, size: 36)
             VStack(alignment: .leading, spacing: 1) {
                 Text(user.displayName)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(theme.typography.font(14, .semibold))
+                    .foregroundStyle(theme.chrome.textPrimary)
                 if let username = user.username {
                     Text("@\(username)")
-                        .font(.system(size: 11, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .font(theme.typography.font(11, .regular))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.4))
                 }
             }
             Spacer()
             trailing()
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+            .fill(theme.chrome.cardFill))
     }
 
     private func smallButton(_ label: String, prominent: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(prominent ? .black : .white.opacity(0.7))
+                .font(theme.typography.font(12, .bold))
+                .foregroundStyle(prominent ? theme.chrome.buttonPrimaryText
+                                           : theme.chrome.buttonSecondaryText)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .background(Capsule().fill(prominent ? Color.yellow : Color.white.opacity(0.1)))
+                .background(Capsule().fill(prominent ? theme.chrome.buttonPrimary
+                                                     : theme.chrome.buttonSecondaryFill))
         }
     }
 }

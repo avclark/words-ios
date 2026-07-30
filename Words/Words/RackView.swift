@@ -5,6 +5,8 @@ import SwiftUI
 ///  • dragging within the rack to reorder (neighbors part to open a gap),
 ///  • receiving tiles dragged back from the board.
 struct RackView: View {
+    @Environment(\.theme) private var theme
+
     let state: BoardState
     let drag: DragController
 
@@ -32,8 +34,8 @@ struct RackView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(red: 0.1, green: 0.13, blue: 0.22))
+            RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
+                .fill(theme.chrome.rackFill)
         )
     }
 

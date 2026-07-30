@@ -111,6 +111,8 @@ struct DefinitionRequest: Identifiable {
 /// Tap-to-define sheet: every word through the tapped tile, each with its
 /// WordNet line or an honest "no definition" note.
 struct DefinitionSheet: View {
+    @Environment(\.theme) private var theme
+
     let request: DefinitionRequest
     @Environment(\.dismiss) private var dismiss
 
@@ -118,14 +120,14 @@ struct DefinitionSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("DEFINITIONS")
-                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                    .font(theme.typography.font(13, .heavy))
                     .kerning(1.5)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.5))
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.3))
                 }
             }
             .padding(.bottom, 14)
@@ -133,19 +135,19 @@ struct DefinitionSheet: View {
             ForEach(request.words, id: \.self) { word in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(word)
-                        .font(.system(size: 24, weight: .black, design: .rounded))
-                        .foregroundStyle(.yellow)
+                        .font(theme.typography.font(24, .black))
+                        .foregroundStyle(theme.chrome.accent)
                     if let definition = Definitions.lookup(word) {
                         ForEach(definition.components(separatedBy: " | "), id: \.self) { sense in
                             Text(sense)
-                                .font(.system(size: 14, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.85))
+                                .font(theme.typography.font(14, .regular))
+                                .foregroundStyle(theme.chrome.ink.opacity(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     } else {
                         Text("A valid word — no definition in our dictionary.")
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(theme.typography.font(14, .regular))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.5))
                             .italic()
                     }
                 }
@@ -155,12 +157,12 @@ struct DefinitionSheet: View {
             Spacer(minLength: 0)
 
             Text(Definitions.attribution)
-                .font(.system(size: 10, design: .rounded))
-                .foregroundStyle(.white.opacity(0.3))
+                .font(theme.typography.caption)
+                .foregroundStyle(theme.chrome.ink.opacity(0.3))
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .presentationDetents([.medium])
-        .presentationBackground(HomeView.background)
+        .presentationBackground(theme.chrome.screenBackground)
     }
 }

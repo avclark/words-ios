@@ -12,6 +12,8 @@
 - also, we we should have three levels instead of two (red/green): Red for best word available, yellow (or some other color) for second best word, green for the rest. (or whatever colors make the most sense).
 - When reviewing a game, let's add definition underneath the best words that could have been played, but weren't (for example: garrets - see screenshot)
 
+- Word of the day feature / slide down definition (like NTY)
+
 ## App screens
 - Sign in/up
 - Home

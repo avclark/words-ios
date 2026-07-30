@@ -2,6 +2,8 @@ import SwiftUI
 
 /// Placeholder tile-swap sheet. Unstyled on purpose — design pass later.
 struct SwapView: View {
+    @Environment(\.theme) private var theme
+
     let rack: [Tile]
     let bagCount: Int
     let onSwap: (Set<Tile.ID>) -> Void
@@ -27,13 +29,13 @@ struct SwapView: View {
                         }
                     } label: {
                         Text(String(tile.letter))
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .font(theme.typography.font(22, .bold))
                             .frame(width: 40, height: 44)
                             .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(selected.contains(tile.id) ? Color.yellow : Color.gray.opacity(0.3))
+                                RoundedRectangle(cornerRadius: theme.metrics.smallCornerRadius)
+                                    .fill(selected.contains(tile.id) ? theme.chrome.accent : Color.gray.opacity(0.3))
                             )
-                            .foregroundStyle(selected.contains(tile.id) ? .black : .primary)
+                            .foregroundStyle(selected.contains(tile.id) ? theme.chrome.onAccent : .primary)
                     }
                 }
             }
@@ -59,6 +61,8 @@ struct SwapView: View {
 /// overlay into the interactive finished board; "Review" analysis lives
 /// behind onAnalyze (nil = unavailable, e.g. pre-server local games).
 struct GameOverView: View {
+    @Environment(\.theme) private var theme
+
     let summary: GameOverSummary
     let localName: String
     let opponentName: String
@@ -104,7 +108,7 @@ struct GameOverView: View {
     var body: some View {
         VStack(spacing: 18) {
             Text("GAME OVER")
-                .font(.system(size: 28, weight: .black, design: .rounded))
+                .font(theme.typography.font(28, .black))
             Text(reasonText)
                 .foregroundStyle(.secondary)
             Text(winnerText)
@@ -125,6 +129,6 @@ struct GameOverView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.88).ignoresSafeArea())
+        .background(theme.chrome.overlayScrim.ignoresSafeArea())
     }
 }

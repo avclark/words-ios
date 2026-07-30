@@ -1,25 +1,26 @@
 import SwiftUI
 
-/// The lobby: every game (in progress and finished) as a tappable list,
-/// Scrabble GO-style, plus profile access and the new-game flow.
-/// Deliberately restrained styling — the full design pass comes later.
+/// The lobby (the Home tab): every game (in progress and finished) as a
+/// tappable list, Scrabble GO-style, plus the new-game flow. The header's
+/// friends/profile buttons jump to their tabs (RootView owns the tab
+/// selection). Deliberately restrained styling — the full design pass
+/// comes later.
 struct HomeView: View {
+    @Environment(\.theme) private var theme
+
     @Binding var profile: PlayerProfile
     let store: GameStore
-    let auth: AuthController
     let friends: FriendsStore
-    /// Owned by RootView so a friend-notification tap can open it.
-    @Binding var showFriends: Bool
+    /// Header shortcuts to the Friends / Profile tabs.
+    let onShowFriends: () -> Void
+    let onShowProfile: () -> Void
     let onOpen: (SavedGame) -> Void
     let onNewGame: (AIDifficulty) -> Void
     let onChallenge: (RemoteGames.FriendDTO) -> Void
 
-    @State private var showProfileEditor = false
     @State private var showNewGameSetup = false
     @State private var showPastGames = false
     @State private var deleteError: String?
-
-    static let background = Color(red: 0.05, green: 0.07, blue: 0.13)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,18 +39,15 @@ struct HomeView: View {
                 showNewGameSetup = true
             } label: {
                 Text("NEW GAME")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.black)
+                    .font(theme.typography.buttonLabel)
+                    .foregroundStyle(theme.chrome.buttonPrimaryText)
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(Capsule().fill(Color.yellow))
+                    .background(Capsule().fill(theme.chrome.buttonPrimary))
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         }
-        .background(Self.background.ignoresSafeArea())
-        .sheet(isPresented: $showProfileEditor) {
-            ProfileEditorSheet(profile: $profile, auth: auth)
-        }
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .sheet(isPresented: $showNewGameSetup) {
             NewGameSetupSheet(friends: friends) { choice in
                 showNewGameSetup = false
@@ -57,11 +55,6 @@ struct HomeView: View {
                 case .robo(let difficulty): onNewGame(difficulty)
                 case .friend(let friend): onChallenge(friend)
                 }
-            }
-        }
-        .sheet(isPresented: $showFriends) {
-            FriendsView(store: friends) { friend in
-                onChallenge(friend)
             }
         }
         .sheet(isPresented: $showPastGames) {
@@ -99,19 +92,19 @@ struct HomeView: View {
     private var header: some View {
         HStack(spacing: 14) {
             Text("WORDS")
-                .font(.system(size: 28, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
+                .font(theme.typography.font(28, .black))
+                .foregroundStyle(theme.chrome.ink)
             Spacer()
             Button {
-                showFriends = true
+                onShowFriends()
             } label: {
                 ZStack {
-                    Circle().fill(Color.white.opacity(0.08))
+                    Circle().fill(theme.chrome.ink.opacity(0.08))
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 15))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.7))
                     if !friends.incoming.isEmpty {
-                        Circle().fill(Color.yellow)
+                        Circle().fill(theme.chrome.accent)
                             .frame(width: 10, height: 10)
                             .offset(x: 13, y: -13)
                     }
@@ -119,7 +112,7 @@ struct HomeView: View {
                 .frame(width: 38, height: 38)
             }
             Button {
-                showProfileEditor = true
+                onShowProfile()
             } label: {
                 AvatarCircle(avatar: profile.avatar, size: 38)
             }
@@ -135,8 +128,8 @@ struct HomeView: View {
                     GameRow(game: game)
                 }
                 .listRowBackground(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
+                    RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
+                        .fill(theme.chrome.cardFill)
                         .padding(.vertical, 4)
                 )
                 .listRowSeparator(.hidden)
@@ -163,23 +156,23 @@ struct HomeView: View {
                     HStack {
                         Image(systemName: "archivebox")
                             .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.5))
                         Text("Past games")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .font(theme.typography.font(14, .semibold))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.7))
                         Spacer()
                         Text("\(store.pastGames.count)")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.4))
+                            .font(theme.typography.font(13, .bold))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.4))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.3))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.3))
                     }
                     .padding(.vertical, 8)
                 }
                 .listRowBackground(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.03))
+                    RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
+                        .fill(theme.chrome.ink.opacity(0.03))
                         .padding(.vertical, 4)
                 )
                 .listRowSeparator(.hidden)
@@ -193,13 +186,13 @@ struct HomeView: View {
         VStack(spacing: 12) {
             Image(systemName: "square.grid.3x3.square")
                 .font(.system(size: 44))
-                .foregroundStyle(.white.opacity(0.25))
+                .foregroundStyle(theme.chrome.ink.opacity(0.25))
             Text("No games yet")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
+                .font(theme.typography.font(18, .bold))
+                .foregroundStyle(theme.chrome.ink.opacity(0.7))
             Text("Start a game against Robo — your games\nwill live here, ready to resume any time.")
-                .font(.system(size: 13, design: .rounded))
-                .foregroundStyle(.white.opacity(0.4))
+                .font(theme.typography.font(13, .regular))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -209,6 +202,8 @@ struct HomeView: View {
 // MARK: - Game row
 
 private struct GameRow: View {
+    @Environment(\.theme) private var theme
+
     let game: SavedGame
 
     var body: some View {
@@ -217,11 +212,11 @@ private struct GameRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(game.opponentPlayer.profile.displayName)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(theme.typography.font(15, .semibold))
+                    .foregroundStyle(theme.chrome.textPrimary)
                 Text("You \(game.localPlayer.score) · \(game.opponentPlayer.profile.displayName) \(game.opponentPlayer.score)")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(theme.typography.font(12, .medium))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.5))
             }
 
             Spacer()
@@ -233,22 +228,22 @@ private struct GameRow: View {
                             Image(systemName: "bubble.left.fill")
                                 .font(.system(size: 8))
                             Text("\(unread)")
-                                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                                .font(theme.typography.font(10, .heavy))
                         }
-                        .foregroundStyle(.black)
+                        .foregroundStyle(theme.chrome.onAccent)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.yellow))
+                        .background(Capsule().fill(theme.chrome.accent))
                     }
                     phaseChip
                 }
                 Text(game.updatedAt.formatted(.relative(presentation: .named)))
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .font(theme.typography.font(10, .regular))
+                    .foregroundStyle(theme.chrome.textMuted)
                 if let expiry = expiryWarning {
                     Text(expiry)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.orange.opacity(0.85))
+                        .font(theme.typography.font(10, .semibold))
+                        .foregroundStyle(theme.chrome.warning.opacity(0.85))
                 }
             }
         }
@@ -259,13 +254,13 @@ private struct GameRow: View {
     private var phaseChip: some View {
         let (label, tint): (String, Color) = {
             switch game.phase {
-            case .yourTurn: return ("YOUR TURN", .yellow)
-            case .waiting: return ("THEIR TURN", .white.opacity(0.5))
-            case .finished: return (finishedLabel, .white.opacity(0.45))
+            case .yourTurn: return ("YOUR TURN", theme.semantic.turnAccent)
+            case .waiting: return ("THEIR TURN", theme.chrome.ink.opacity(0.5))
+            case .finished: return (finishedLabel, theme.chrome.ink.opacity(0.45))
             }
         }()
         Text(label)
-            .font(.system(size: 9, weight: .heavy, design: .rounded))
+            .font(theme.typography.font(9, .heavy))
             .kerning(0.5)
             .foregroundStyle(tint)
             .padding(.horizontal, 7)
@@ -302,6 +297,8 @@ private struct GameRow: View {
 /// same swipe-delete semantics apply as in the lobby. Purely a
 /// presentation split — profile stats draw on all finished games.
 private struct PastGamesView: View {
+    @Environment(\.theme) private var theme
+
     let store: GameStore
     let onOpen: (SavedGame) -> Void
     let onDelete: (SavedGame) -> Void
@@ -311,14 +308,14 @@ private struct PastGamesView: View {
         VStack(spacing: 0) {
             HStack {
                 Text("PAST GAMES")
-                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .font(theme.typography.font(15, .black))
                     .kerning(1.5)
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(theme.chrome.textPrimary)
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.3))
                 }
             }
             .padding(.horizontal, 20)
@@ -328,8 +325,8 @@ private struct PastGamesView: View {
             if store.pastGames.isEmpty {
                 // Deleting the last one shouldn't leave a blank sheet.
                 Text("No past games — finished games land here once you've seen the result.")
-                    .font(.system(size: 13, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(theme.typography.font(13, .regular))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
                     .multilineTextAlignment(.center)
                     .padding(30)
                 Spacer()
@@ -342,8 +339,8 @@ private struct PastGamesView: View {
                             GameRow(game: game)
                         }
                         .listRowBackground(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.06))
+                            RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
+                                .fill(theme.chrome.cardFill)
                                 .padding(.vertical, 4)
                         )
                         .listRowSeparator(.hidden)
@@ -360,16 +357,20 @@ private struct PastGamesView: View {
                 .scrollContentBackground(.hidden)
             }
         }
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .presentationDetents([.large])
-        .presentationBackground(HomeView.background)
+        .presentationBackground(theme.chrome.screenBackground)
     }
 }
 
 // MARK: - Avatar
 
 /// Small round avatar used across the lobby (rows, profile button, setup).
+/// The avatar's own tint is identity data, not a theme value; only the
+/// ring reads the theme.
 struct AvatarCircle: View {
+    @Environment(\.theme) private var theme
+
     let avatar: Avatar
     var size: CGFloat = 40
 
@@ -381,7 +382,7 @@ struct AvatarCircle: View {
                 .foregroundStyle(avatar.tint)
         }
         .frame(width: size, height: size)
-        .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+        .overlay(Circle().strokeBorder(theme.chrome.border, lineWidth: theme.metrics.hairline))
     }
 }
 
@@ -389,9 +390,15 @@ struct AvatarCircle: View {
 
 /// The thin profile: name + avatar (synced to the server when signed in),
 /// plus the account controls — sign out and App-Store-required deletion.
-private struct ProfileEditorSheet: View {
+/// Doubles as the Profile TAB (isTab: no Done button, draws its own
+/// screen background instead of a sheet's presentation background).
+struct ProfileEditorSheet: View {
+    @Environment(\.theme) private var theme
+
     @Binding var profile: PlayerProfile
     let auth: AuthController
+    /// True when shown as a root tab rather than a sheet.
+    var isTab: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingDelete = false
     @State private var prefs: RemoteGames.NotificationPrefs?
@@ -412,7 +419,7 @@ private struct ProfileEditorSheet: View {
         ScrollView {
         VStack(spacing: 20) {
             Text("Your profile")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(theme.typography.font(18, .bold))
 
             TextField("Your name", text: $profile.displayName)
                 .textFieldStyle(.roundedBorder)
@@ -429,8 +436,8 @@ private struct ProfileEditorSheet: View {
                     } label: {
                         AvatarCircle(avatar: avatar, size: 36)
                             .overlay(
-                                Circle().strokeBorder(profile.avatar == avatar ? Color.yellow : .clear,
-                                                      lineWidth: 2)
+                                Circle().strokeBorder(profile.avatar == avatar ? theme.chrome.accent : .clear,
+                                                      lineWidth: theme.metrics.selectionBorder)
                             )
                     }
                 }
@@ -443,36 +450,39 @@ private struct ProfileEditorSheet: View {
                     Image(systemName: "chart.bar.fill")
                         .font(.system(size: 13))
                     Text("Your stats")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(theme.typography.font(14, .semibold))
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.3))
                 }
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.06)))
+                .foregroundStyle(theme.chrome.ink.opacity(0.85))
+                .padding(theme.metrics.cardPadding)
+                .background(RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                    .fill(theme.chrome.cardFill))
             }
 
-            Button("Done") { dismiss() }
-                .buttonStyle(.borderedProminent)
+            if !isTab {
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
 
-            Divider().overlay(.white.opacity(0.15))
+            Divider().overlay(theme.chrome.border)
 
             notificationSection
 
             blockedSection
 
-            Divider().overlay(.white.opacity(0.15))
+            Divider().overlay(theme.chrome.border)
 
             accountSection
         }
         .padding(24)
         }
         .scrollDismissesKeyboard(.interactively)
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .presentationDetents([.medium, .large])
-        .presentationBackground(HomeView.background)
+        .presentationBackground(theme.chrome.screenBackground)
         .sheet(isPresented: $showStats) {
             StatsSheet()
         }
@@ -499,8 +509,8 @@ private struct ProfileEditorSheet: View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
                 Text("@")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(theme.typography.font(14, .bold))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
                 TextField("username (optional)", text: $username)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
@@ -509,19 +519,19 @@ private struct ProfileEditorSheet: View {
                     .onSubmit { saveUsername() }
                 if username.lowercased() != (savedUsername ?? "") {
                     Button("Save") { saveUsername() }
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(theme.typography.font(13, .semibold))
                         .disabled(savingUsername)
                 }
             }
             if let feedback = usernameFeedback {
                 Text(feedback.text)
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(feedback.good ? Color.green.opacity(0.8)
-                                                   : Color(red: 1, green: 0.45, blue: 0.4))
+                    .font(theme.typography.font(11, .regular))
+                    .foregroundStyle(feedback.good ? theme.semantic.validMove.opacity(0.8)
+                                                   : theme.chrome.error)
             } else {
                 Text("Friends can find you by your name. A username is an optional exact handle on top.")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
                     .multilineTextAlignment(.center)
             }
         }
@@ -578,9 +588,9 @@ private struct ProfileEditorSheet: View {
     private var notificationSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("NOTIFICATIONS")
-                .font(.system(size: 11, weight: .heavy, design: .rounded))
+                .font(theme.typography.sectionTitle)
                 .kerning(1)
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
             if prefs != nil {
                 prefToggle("Your turn", \.turn)
                 prefToggle("New games", \.newGame)
@@ -592,16 +602,16 @@ private struct ProfileEditorSheet: View {
             } else if prefsLoadFailed {
                 HStack {
                     Text("Couldn't load notification settings.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .font(theme.typography.font(12, .regular))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.5))
                     Button("Try again") {
                         Task { await loadRemoteSections() }
                     }
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(theme.typography.font(12, .semibold))
                 }
             } else {
                 ProgressView()
-                    .tint(.white.opacity(0.4))
+                    .tint(theme.chrome.ink.opacity(0.4))
                     .frame(maxWidth: .infinity)
             }
         }
@@ -617,8 +627,8 @@ private struct ProfileEditorSheet: View {
                     Task { try? await RemoteGames.saveNotificationPrefs(prefs) }
                 }
             }))
-            .font(.system(size: 13, design: .rounded))
-            .tint(.yellow)
+            .font(theme.typography.body)
+            .tint(theme.chrome.accent)
     }
 
     @ViewBuilder
@@ -626,14 +636,14 @@ private struct ProfileEditorSheet: View {
         if !blocked.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("BLOCKED PLAYERS")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .font(theme.typography.sectionTitle)
                     .kerning(1)
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
                 ForEach(blocked) { user in
                     HStack {
                         Text(user.displayName)
-                            .font(.system(size: 13, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .font(theme.typography.body)
+                            .foregroundStyle(theme.chrome.ink.opacity(0.7))
                         Spacer()
                         Button("Unblock") {
                             let name = user.displayName
@@ -643,14 +653,14 @@ private struct ProfileEditorSheet: View {
                                 unblockNotice = "\(name) is unblocked. Blocking ended your friendship, so you're not friends again automatically — send a friend request or share your invite link if you want to reconnect."
                             }
                         }
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(theme.typography.font(12, .semibold))
                     }
                 }
                 // The rule, stated where the action lives — never a
                 // silent "wait, what happened?" moment.
                 Text("Unblocking doesn't re-add someone as a friend.")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
             }
             .alert("Unblocked",
                    isPresented: .init(get: { unblockNotice != nil },
@@ -667,8 +677,8 @@ private struct ProfileEditorSheet: View {
         if case .signedIn = auth.state {
             VStack(spacing: 12) {
                 Text("Signed in with Apple")
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(theme.typography.font(12, .regular))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.45))
                 HStack(spacing: 20) {
                     Button("Sign out") {
                         Task {
@@ -676,11 +686,11 @@ private struct ProfileEditorSheet: View {
                             dismiss()
                         }
                     }
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(theme.typography.font(14, .semibold))
                     Button("Delete account…", role: .destructive) {
                         confirmingDelete = true
                     }
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(theme.typography.font(14, .semibold))
                 }
             }
         }
@@ -693,6 +703,8 @@ private struct ProfileEditorSheet: View {
 /// generic player model surfacing in UI: Robo and each friend are just
 /// selectable opponents; a friend seat becomes a human seat server-side.
 private struct NewGameSetupSheet: View {
+    @Environment(\.theme) private var theme
+
     enum Choice {
         case robo(AIDifficulty)
         case friend(RemoteGames.FriendDTO)
@@ -708,7 +720,7 @@ private struct NewGameSetupSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New game")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(theme.typography.font(18, .bold))
                 .frame(maxWidth: .infinity)
 
             sectionLabel("OPPONENT")
@@ -733,8 +745,8 @@ private struct NewGameSetupSheet: View {
                     }
                     if friends.friends.isEmpty {
                         Text("Add friends to challenge them — tap the friends icon on the home screen.")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.35))
+                            .font(theme.typography.font(12, .regular))
+                            .foregroundStyle(theme.chrome.textMuted)
                             .padding(.top, 2)
                     }
                 }
@@ -752,8 +764,8 @@ private struct NewGameSetupSheet: View {
                 .pickerStyle(.segmented)
 
                 Text(difficulty.blurb)
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(theme.typography.font(12, .regular))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.45))
                     .frame(maxWidth: .infinity)
             }
 
@@ -762,10 +774,10 @@ private struct NewGameSetupSheet: View {
                 onStart(selectedFriend.map { .friend($0) } ?? .robo(difficulty))
             } label: {
                 Text(selectedFriend.map { "CHALLENGE \($0.displayName.uppercased())" } ?? "START GAME")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.black)
+                    .font(theme.typography.buttonLabel)
+                    .foregroundStyle(theme.chrome.buttonPrimaryText)
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(Capsule().fill(Color.yellow))
+                    .background(Capsule().fill(theme.chrome.buttonPrimary))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
@@ -773,15 +785,15 @@ private struct NewGameSetupSheet: View {
         }
         .padding(24)
         .presentationDetents([.large])
-        .presentationBackground(HomeView.background)
+        .presentationBackground(theme.chrome.screenBackground)
         .task { await friends.refresh() }
     }
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .heavy, design: .rounded))
+            .font(theme.typography.sectionTitle)
             .kerning(1)
-            .foregroundStyle(.white.opacity(0.4))
+            .foregroundStyle(theme.chrome.ink.opacity(0.4))
     }
 
     private func opponentRow(avatar: Avatar, name: String, detail: String,
@@ -790,22 +802,22 @@ private struct NewGameSetupSheet: View {
             AvatarCircle(avatar: avatar, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .font(theme.typography.font(15, .semibold))
+                    .foregroundStyle(theme.chrome.textPrimary)
                 Text(detail)
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(theme.typography.font(12, .regular))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.5))
             }
             Spacer()
             if selected {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.yellow)
+                    .foregroundStyle(theme.chrome.accent)
             }
         }
         .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(selected ? 0.08 : 0.04))
+            RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                .fill(theme.chrome.ink.opacity(selected ? 0.08 : 0.04))
         )
     }
 }

@@ -4,6 +4,8 @@ import AuthenticationServices
 /// The auth gate: shown whenever there is no session. Minimal and
 /// unstyled on purpose — the design pass comes later.
 struct SignInView: View {
+    @Environment(\.theme) private var theme
+
     let auth: AuthController
 
     var body: some View {
@@ -11,11 +13,11 @@ struct SignInView: View {
             Spacer()
 
             Text("WORDS")
-                .font(.system(size: 40, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
+                .font(theme.typography.font(40, .black))
+                .foregroundStyle(theme.chrome.ink)
             Text("Sign in to keep your games\nand play with friends.")
-                .font(.system(size: 14, design: .rounded))
-                .foregroundStyle(.white.opacity(0.55))
+                .font(theme.typography.font(14, .regular))
+                .foregroundStyle(theme.chrome.textSecondary)
                 .multilineTextAlignment(.center)
 
             Spacer()
@@ -32,8 +34,8 @@ struct SignInView: View {
 
             if let error = auth.lastError {
                 Text(error)
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(Color(red: 1, green: 0.45, blue: 0.4))
+                    .font(theme.typography.font(12, .regular))
+                    .foregroundStyle(theme.chrome.error)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
             }
@@ -41,6 +43,6 @@ struct SignInView: View {
             Spacer().frame(height: 28)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
     }
 }

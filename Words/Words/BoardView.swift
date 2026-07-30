@@ -4,6 +4,8 @@ import SwiftUI
 /// tapped (return to rack) or dragged (reposition / return). The hover
 /// highlight and the live score chip are overlays, so cells stay simple.
 struct BoardView: View {
+    @Environment(\.theme) private var theme
+
     let state: BoardState
     let drag: DragController
     let metrics: BoardMetrics
@@ -27,6 +29,9 @@ struct BoardView: View {
                     }
                 }
             }
+            // The cell spacing shows this through — it IS the gridline.
+            // (Identical to the frame color in the default theme.)
+            .background(theme.board.gridline)
             .padding(metrics.padding)
 
             hintOutlines
@@ -35,8 +40,8 @@ struct BoardView: View {
             scoreChip
         }
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(red: 0.07, green: 0.1, blue: 0.18))
+            RoundedRectangle(cornerRadius: theme.metrics.boardCornerRadius, style: .continuous)
+                .fill(theme.board.frame)
         )
         // Two-state zoom + pan. Hit-testing inverts this exact transform
         // (see BoardMetrics.cell), so drops stay accurate while zoomed.
@@ -119,7 +124,7 @@ struct BoardView: View {
             let style = outlineStyle(for: highlight.tier)
             ForEach(highlight.coords, id: \.self) { coord in
                 let origin = metrics.cellOrigin(coord)
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: theme.metrics.highlightCornerRadius, style: .continuous)
                     .strokeBorder(style.tint.opacity(style.opacity),
                                   lineWidth: style.lineWidth)
                     .frame(width: metrics.cellSize, height: metrics.cellSize)
@@ -133,9 +138,9 @@ struct BoardView: View {
     private func outlineStyle(for tier: HintHighlight.Tier)
         -> (tint: Color, opacity: Double, lineWidth: CGFloat) {
         switch tier {
-        case .best:   (.red, 0.95, 2.5)
-        case .second: (.yellow, 0.85, 2.0)
-        case .rest:   (.green, 0.7, 1.5)
+        case .best:   (theme.semantic.hintBest, 0.95, 2.5)
+        case .second: (theme.semantic.hintSecond, 0.85, 2.0)
+        case .rest:   (theme.semantic.hintRest, 0.7, 1.5)
         }
     }
 
@@ -143,11 +148,11 @@ struct BoardView: View {
     private var hoverHighlight: some View {
         if let cell = drag.hoverCell {
             let origin = metrics.cellOrigin(cell)
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.yellow.opacity(0.28))
+            RoundedRectangle(cornerRadius: theme.metrics.highlightCornerRadius, style: .continuous)
+                .fill(theme.semantic.dropTarget.opacity(0.28))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Color.yellow, lineWidth: 2)
+                    RoundedRectangle(cornerRadius: theme.metrics.highlightCornerRadius, style: .continuous)
+                        .strokeBorder(theme.semantic.dropTarget, lineWidth: 2)
                 )
                 .frame(width: metrics.cellSize, height: metrics.cellSize)
                 .offset(x: origin.x, y: origin.y)
@@ -167,8 +172,8 @@ struct BoardView: View {
            let first = mainWord.first, let last = mainWord.last {
             let o1 = metrics.cellOrigin(first)
             let o2 = metrics.cellOrigin(last)
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.green.opacity(0.9), lineWidth: 2.5)
+            RoundedRectangle(cornerRadius: theme.metrics.smallCornerRadius, style: .continuous)
+                .strokeBorder(theme.semantic.validMove.opacity(0.9), lineWidth: 2.5)
                 .frame(width: o2.x - o1.x + metrics.cellSize,
                        height: o2.y - o1.y + metrics.cellSize)
                 .offset(x: o1.x, y: o1.y)
@@ -189,11 +194,11 @@ struct BoardView: View {
                let end = mainWord.last {
                 let anchor = metrics.cellCenter(end)
                 Text("+\(score)")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(theme.typography.font(15, .heavy))
+                    .foregroundStyle(theme.chrome.ink)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.green))
+                    .background(Capsule().fill(theme.semantic.validMove))
                     .position(x: min(anchor.x + metrics.cellSize * 0.9,
                                      metrics.side - 18),
                               y: max(14, anchor.y - metrics.cellSize * 0.9))
@@ -208,12 +213,12 @@ struct BoardView: View {
                 let score = state.currentScore()
 
                 Text(score.map { "+\($0)" } ?? "—")
-                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                    .foregroundStyle(score == nil ? Color.white.opacity(0.6) : .black)
+                    .font(theme.typography.font(15, .heavy))
+                    .foregroundStyle(score == nil ? theme.chrome.ink.opacity(0.6) : theme.chrome.onAccent)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(
-                        Capsule().fill(score == nil ? Color.white.opacity(0.2) : Color.yellow)
+                        Capsule().fill(score == nil ? theme.chrome.ink.opacity(0.2) : theme.semantic.dropTarget)
                     )
                     .position(x: anchor.x, y: max(14, anchor.y - metrics.cellSize * 1.1))
                     .transition(.scale.combined(with: .opacity))
@@ -223,37 +228,37 @@ struct BoardView: View {
     }
 }
 
-/// The empty square: premium colors, labels, center star.
+/// The empty square: premium colors, labels, center star — all from the
+/// theme's board tokens.
 private struct SquareBackground: View {
+    @Environment(\.theme) private var theme
+
     let premium: Premium?
     let isCenter: Bool
     let size: CGFloat
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.15, style: .continuous)
-            .fill(color)
+        RoundedRectangle(cornerRadius: size * theme.metrics.cellCornerFactor, style: .continuous)
+            .fill(theme.board.premiumColor(premium, isCenter: isCenter))
             .overlay {
                 if isCenter {
                     Image(systemName: "star.fill")
                         .font(.system(size: size * 0.5))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(theme.board.premiumLabel)
                 } else if let premium {
                     // Scrabble GO-scale labels: the two letters span ~3/4
                     // of the square so premiums read at full-board zoom.
                     Text(premium.label)
-                        .font(.system(size: size * 0.48, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(theme.typography.font(size * 0.48, .semibold))
+                        .foregroundStyle(theme.board.premiumLabel)
                 }
             }
-    }
-
-    private var color: Color {
-        switch premium {
-        case .tripleWord: return Color(red: 0.85, green: 0.28, blue: 0.25)
-        case .doubleWord: return Color(red: 0.9, green: 0.55, blue: 0.25)
-        case .tripleLetter: return Color(red: 0.2, green: 0.5, blue: 0.85)
-        case .doubleLetter: return Color(red: 0.35, green: 0.68, blue: 0.85)
-        case nil: return Color(red: 0.13, green: 0.17, blue: 0.27)
-        }
+            .overlay {
+                if theme.board.cellBorderWidth > 0 {
+                    RoundedRectangle(cornerRadius: size * theme.metrics.cellCornerFactor, style: .continuous)
+                        .strokeBorder(theme.board.cellBorder,
+                                      lineWidth: theme.board.cellBorderWidth)
+                }
+            }
     }
 }

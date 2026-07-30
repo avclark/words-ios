@@ -218,6 +218,8 @@ final class ChatStore {
 /// iMessage-style thread + the emoji quick panel. Emoji are one tap from
 /// here (chat button → emoji): they send immediately, no compose step.
 struct ChatSheet: View {
+    @Environment(\.theme) private var theme
+
     let chat: ChatStore
     let board: BoardState
     let onBlocked: () -> Void
@@ -242,7 +244,7 @@ struct ChatSheet: View {
             emojiStrip
             inputBar
         }
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .onAppear {
             chatLog.notice("ChatSheet onAppear (UIKit appearance)")
         }
@@ -278,8 +280,8 @@ struct ChatSheet: View {
         HStack(spacing: 10) {
             AvatarCircle(avatar: opponent.avatar, size: 30)
             Text(opponent.displayName)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.9))
+                .font(theme.typography.font(15, .bold))
+                .foregroundStyle(theme.chrome.textPrimary)
             Spacer()
             Menu {
                 Button("Report \(opponent.displayName)…") { showReportDialog = true }
@@ -288,11 +290,11 @@ struct ChatSheet: View {
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(theme.chrome.ink.opacity(0.5))
                     .frame(width: 32, height: 32)
             }
             Button("Done") { dismiss() }
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(theme.typography.font(14, .semibold))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -307,23 +309,23 @@ struct ChatSheet: View {
                     // failure gets a retry — never a blank view.
                     if !chat.loaded && !chat.loadFailed && chat.messages.isEmpty {
                         ProgressView()
-                            .tint(.white.opacity(0.5))
+                            .tint(theme.chrome.ink.opacity(0.5))
                             .padding(.top, 30)
                     } else if chat.loadFailed && chat.messages.isEmpty {
                         VStack(spacing: 10) {
                             Text("Couldn't load messages.")
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .font(theme.typography.body)
+                                .foregroundStyle(theme.chrome.ink.opacity(0.5))
                             Button("Try again") {
                                 Task { _ = await chat.load() }
                             }
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .font(theme.typography.font(13, .semibold))
                         }
                         .padding(.top, 30)
                     } else if chat.messages.isEmpty {
                         Text("Say something — \(opponent.displayName) will get a notification.")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.35))
+                            .font(theme.typography.font(12, .regular))
+                            .foregroundStyle(theme.chrome.textMuted)
                             .padding(.top, 30)
                     }
                     ForEach(chat.messages) { message in
@@ -356,13 +358,13 @@ struct ChatSheet: View {
                     .padding(.vertical, 2)
             } else {
                 Text(message.body)
-                    .font(.system(size: 15, design: .rounded))
-                    .foregroundStyle(mine ? .black : .white.opacity(0.92))
+                    .font(theme.typography.font(15, .regular))
+                    .foregroundStyle(mine ? theme.chrome.onAccent : theme.chrome.ink.opacity(0.92))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(mine ? Color.yellow : Color.white.opacity(0.12))
+                            .fill(mine ? theme.chrome.accent : theme.chrome.ink.opacity(0.12))
                     )
             }
             if !mine { Spacer(minLength: 60) }
@@ -389,16 +391,16 @@ struct ChatSheet: View {
         VStack(spacing: 4) {
         if let sendError = chat.sendError {
             Text(sendError)
-                .font(.system(size: 11, design: .rounded))
-                .foregroundStyle(Color(red: 1, green: 0.45, blue: 0.4))
+                .font(theme.typography.font(11, .regular))
+                .foregroundStyle(theme.chrome.error)
         }
         HStack(spacing: 8) {
             TextField("Message…", text: $draft, axis: .vertical)
                 .lineLimit(1...4)
-                .font(.system(size: 15, design: .rounded))
+                .font(theme.typography.font(15, .regular))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Capsule().fill(Color.white.opacity(0.1)))
+                .background(Capsule().fill(theme.chrome.ink.opacity(0.1)))
             Button {
                 let text = draft
                 draft = ""
@@ -407,7 +409,7 @@ struct ChatSheet: View {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
                     .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty
-                                     ? Color.white.opacity(0.2) : Color.yellow)
+                                     ? theme.chrome.ink.opacity(0.2) : theme.chrome.accent)
             }
             .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
         }

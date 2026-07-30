@@ -6,6 +6,8 @@ import SwiftUI
 /// (green outline). Renders progressively — turns appear as the engine
 /// finishes them, behind a clear progress line, never a frozen screen.
 struct ReviewView: View {
+    @Environment(\.theme) private var theme
+
     let engine: ReviewEngine
     let opponentName: String
 
@@ -20,14 +22,14 @@ struct ReviewView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
                     Text("GAME REVIEW")
-                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .font(theme.typography.font(15, .black))
                         .kerning(1.5)
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(theme.chrome.textPrimary)
                     Spacer()
                     Button { dismiss() } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 22))
-                            .foregroundStyle(.white.opacity(0.3))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.3))
                     }
                 }
 
@@ -42,8 +44,8 @@ struct ReviewView: View {
                 case .done:
                     if engine.turns.isEmpty {
                         Text("No turns to review in this game.")
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(theme.typography.font(14, .regular))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.5))
                     } else {
                         summaryGrid
                         turnList
@@ -51,14 +53,14 @@ struct ReviewView: View {
                 case .failed(let message):
                     VStack(spacing: 10) {
                         Text(message)
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .font(theme.typography.font(14, .regular))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.6))
                             .multilineTextAlignment(.center)
                         Button("Try again") {
                             Task { await engine.run() }
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.yellow)
+                        .tint(theme.chrome.accent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 40)
@@ -66,9 +68,9 @@ struct ReviewView: View {
             }
             .padding(20)
         }
-        .background(HomeView.background.ignoresSafeArea())
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
         .presentationDetents([.large])
-        .presentationBackground(HomeView.background)
+        .presentationBackground(theme.chrome.screenBackground)
         .onAppear {
             reviewLog.notice("ReviewView onAppear (UIKit appearance)")
         }
@@ -103,26 +105,26 @@ struct ReviewView: View {
     private func summaryCard(_ label: String, _ value: String, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 9, weight: .heavy, design: .rounded))
+                .font(theme.typography.font(9, .heavy))
                 .kerning(1)
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(theme.chrome.ink.opacity(0.4))
             Text(value)
-                .font(.system(size: 17, weight: .black, design: .rounded))
-                .foregroundStyle(.yellow)
+                .font(theme.typography.font(17, .black))
+                .foregroundStyle(theme.chrome.accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.45))
                     .lineLimit(2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(theme.metrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.06))
+            RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                .fill(theme.chrome.cardFill)
         )
     }
 
@@ -130,20 +132,20 @@ struct ReviewView: View {
         VStack(spacing: 8) {
             if let fraction {
                 ProgressView(value: fraction)
-                    .tint(.yellow)
+                    .tint(theme.chrome.accent)
             } else {
                 ProgressView()
-                    .tint(.yellow)
+                    .tint(theme.chrome.accent)
             }
             Text(text)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.5))
+                .font(theme.typography.font(12, .semibold))
+                .foregroundStyle(theme.chrome.ink.opacity(0.5))
         }
         .frame(maxWidth: .infinity)
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                .fill(theme.chrome.ink.opacity(0.05))
         )
     }
 
@@ -156,8 +158,8 @@ struct ReviewView: View {
             }
             if engine.turnsWithRackUnknown > 0 {
                 Text("\(engine.turnsWithRackUnknown) turn\(engine.turnsWithRackUnknown == 1 ? " was" : "s were") played before rack history existed, so no best play can be computed for \(engine.turnsWithRackUnknown == 1 ? "it" : "them").")
-                    .font(.system(size: 10, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.textMuted)
                     .multilineTextAlignment(.center)
                     .padding(.top, 4)
             }
@@ -173,32 +175,32 @@ struct ReviewView: View {
             } label: {
                 HStack(alignment: .top, spacing: 10) {
                     Text("T\(turn.turnLabel)")
-                        .font(.system(size: 12, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .font(theme.typography.font(12, .heavy))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.4))
                         .frame(width: 28, alignment: .leading)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(playedLine(turn))
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .font(theme.typography.font(14, .semibold))
+                            .foregroundStyle(theme.chrome.textPrimary)
                         Text(bestLine(turn))
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(turn.foundBest ? Color.green.opacity(0.85)
-                                             : .white.opacity(0.5))
+                            .font(theme.typography.font(12, .regular))
+                            .foregroundStyle(turn.foundBest ? theme.semantic.validMove.opacity(0.85)
+                                             : theme.chrome.ink.opacity(0.5))
                         // The word you missed, defined — same bundled
                         // source and lookup path as tap-to-define, incl.
                         // inflections; ENABLE-only words say so honestly.
                         if let word = missedBestWord(turn) {
                             if let definition = Definitions.lookup(word) {
                                 Text(definition.components(separatedBy: " | ").first ?? definition)
-                                    .font(.system(size: 11, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.4))
+                                    .font(theme.typography.font(11, .regular))
+                                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
                                     .lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .multilineTextAlignment(.leading)
                             } else {
                                 Text("A valid word — no definition in our dictionary.")
-                                    .font(.system(size: 11, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.35))
+                                    .font(theme.typography.font(11, .regular))
+                                    .foregroundStyle(theme.chrome.textMuted)
                                     .italic()
                             }
                         }
@@ -207,15 +209,15 @@ struct ReviewView: View {
                     if turn.foundBest {
                         Image(systemName: "star.fill")
                             .font(.system(size: 13))
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(theme.chrome.accent)
                     } else if turn.missed > 0 {
                         Text("−\(turn.missed)")
-                            .font(.system(size: 13, weight: .heavy, design: .rounded))
-                            .foregroundStyle(.orange.opacity(0.85))
+                            .font(theme.typography.font(13, .heavy))
+                            .foregroundStyle(theme.chrome.warning.opacity(0.85))
                     }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.3))
+                        .foregroundStyle(theme.chrome.ink.opacity(0.3))
                         .rotationEffect(.degrees(expandedTurn == turn.id ? 180 : 0))
                 }
             }
@@ -228,24 +230,24 @@ struct ReviewView: View {
                         .frame(maxWidth: .infinity)
                         .aspectRatio(1, contentMode: .fit)
                     HStack(spacing: 14) {
-                        legend(color: .yellow, text: "You played")
+                        legend(color: theme.chrome.accent, text: "You played")
                         if !turn.foundBest, turn.bestPlacement != nil {
-                            legend(color: .green, text: "Best: \(turn.bestWord ?? "") +\(turn.bestScore)")
+                            legend(color: theme.semantic.validMove, text: "Best: \(turn.bestWord ?? "") +\(turn.bestScore)")
                         }
                     }
                     if !turn.rack.isEmpty {
                         Text("Rack: \(turn.rack.joined(separator: " "))")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(theme.typography.font(11, .semibold))
+                            .foregroundStyle(theme.chrome.ink.opacity(0.5))
                     }
                 }
                 .transition(.opacity)
             }
         }
-        .padding(12)
+        .padding(theme.metrics.cardPadding)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+            RoundedRectangle(cornerRadius: theme.metrics.cardCornerRadius, style: .continuous)
+                .fill(theme.chrome.ink.opacity(0.05))
         )
     }
 
@@ -255,8 +257,8 @@ struct ReviewView: View {
                 .fill(color.opacity(0.8))
                 .frame(width: 10, height: 10)
             Text(text)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.6))
+                .font(theme.typography.font(11, .semibold))
+                .foregroundStyle(theme.chrome.ink.opacity(0.6))
         }
     }
 
@@ -293,6 +295,8 @@ struct ReviewView: View {
 /// visual — none of the live board's gesture/zoom machinery, so it can't
 /// interfere with invariants 1–4.
 struct MiniBoardView: View {
+    @Environment(\.theme) private var theme
+
     let board: [BoardCoord: Tile]
     let played: [BoardCoord: Tile]
     let best: [BoardCoord: Tile]
@@ -316,7 +320,7 @@ struct MiniBoardView: View {
                 if let letter = tile.displayLetter {
                     context.draw(
                         Text(String(letter))
-                            .font(.system(size: cell * 0.62, weight: .bold, design: .rounded))
+                            .font(theme.typography.font(cell * 0.62, .bold))
                             .foregroundColor(textColor),
                         at: CGPoint(x: r.midX, y: r.midY))
                 }
@@ -329,31 +333,32 @@ struct MiniBoardView: View {
                     let r = rect(coord)
                     let premium = PremiumLayout.squares[coord]
                     let color: Color = premium == nil
-                        ? Color.white.opacity(0.06)
-                        : Color.white.opacity(0.14)
+                        ? theme.chrome.ink.opacity(0.06)
+                        : theme.chrome.ink.opacity(0.14)
                     context.fill(Path(roundedRect: r, cornerRadius: cell * 0.15),
                                  with: .color(color))
                 }
             }
             // Base position (muted), then this turn's tiles on top.
             for (coord, tile) in board {
-                drawTile(coord, tile, fill: Color.white.opacity(0.25),
-                         textColor: .white.opacity(0.85))
+                drawTile(coord, tile, fill: theme.chrome.ink.opacity(0.25),
+                         textColor: theme.chrome.ink.opacity(0.85))
             }
             for (coord, tile) in played {
-                drawTile(coord, tile, fill: Color.yellow, textColor: .black)
+                drawTile(coord, tile, fill: theme.chrome.accent,
+                         textColor: theme.chrome.onAccent)
             }
             for (coord, tile) in best {
                 let r = rect(coord)
-                drawTile(coord, tile, fill: Color.green.opacity(0.35),
-                         textColor: .white)
+                drawTile(coord, tile, fill: theme.semantic.validMove.opacity(0.35),
+                         textColor: theme.chrome.ink)
                 context.stroke(Path(roundedRect: r, cornerRadius: cell * 0.15),
-                               with: .color(.green), lineWidth: 1.5)
+                               with: .color(theme.semantic.validMove), lineWidth: 1.5)
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 0.07, green: 0.1, blue: 0.18))
+            RoundedRectangle(cornerRadius: theme.metrics.smallCornerRadius, style: .continuous)
+                .fill(theme.board.background)
         )
     }
 }
