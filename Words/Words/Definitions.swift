@@ -30,6 +30,17 @@ enum Definitions {
         DispatchQueue.global(qos: .utility).async { _ = store }
     }
 
+    /// Word of the Day pool — TEMPORARY FILTER, isolated here on purpose.
+    /// The featured word is drawn only from entries that HAVE a definition
+    /// (the store's keys = ENABLE ∩ WordNet), so the reveal always has a
+    /// gloss. When the definitions source is expanded, relax the pool by
+    /// changing THIS ONE function (e.g. draw from the Lexicon instead) —
+    /// nothing else encodes the filter.
+    /// First call pays the lazy store load — call off the main thread.
+    static func randomDefinedWord() -> String? {
+        store.keys.randomElement()
+    }
+
     /// The definition line for a word, resolving regular inflections to
     /// their base entry. Nil = valid-but-undefined (caller says so).
     static func lookup(_ word: String) -> String? {

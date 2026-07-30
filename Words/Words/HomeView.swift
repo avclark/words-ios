@@ -29,12 +29,20 @@ struct HomeView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
+            WordOfTheDayView()
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+
             if store.currentGames.isEmpty && store.pastGames.isEmpty {
                 emptyState
             } else {
                 gameList
             }
-
+        }
+        // NEW GAME is pinned above the tab bar; the list scrolls behind
+        // it (safeAreaInset gives the scroll content the matching bottom
+        // inset, so the last row can always clear the button).
+        .safeAreaInset(edge: .bottom) {
             Button {
                 showNewGameSetup = true
             } label: {
@@ -45,7 +53,10 @@ struct HomeView: View {
                     .background(Capsule().fill(theme.chrome.buttonPrimary))
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.top, 8)
+            // Breathing room above the tab bar so the button and the
+            // tabs don't read as one cluster.
+            .padding(.bottom, 10)
         }
         .background(theme.chrome.screenBackground.ignoresSafeArea())
         .sheet(isPresented: $showNewGameSetup) {
@@ -91,9 +102,7 @@ struct HomeView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Text("WORDS")
-                .font(theme.typography.font(28, .black))
-                .foregroundStyle(theme.chrome.ink)
+            LogoView()
             Spacer()
             Button {
                 onShowFriends()
@@ -168,6 +177,9 @@ struct HomeView: View {
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(theme.chrome.ink.opacity(0.3))
                     }
+                    // A comfortable tap target — the old row was too thin.
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                     .padding(.vertical, 8)
                 }
                 .listRowBackground(
@@ -360,6 +372,22 @@ private struct PastGamesView: View {
         .background(theme.chrome.screenBackground.ignoresSafeArea())
         .presentationDetents([.large])
         .presentationBackground(theme.chrome.screenBackground)
+    }
+}
+
+// MARK: - Logo
+
+/// The WORDS wordmark, extracted so a later design pass (or a theme) can
+/// swap the mark in one place. Renders from theme typography.
+struct LogoView: View {
+    @Environment(\.theme) private var theme
+
+    var size: CGFloat = 28
+
+    var body: some View {
+        Text("WORDS")
+            .font(theme.typography.font(size, .black))
+            .foregroundStyle(theme.chrome.ink)
     }
 }
 
