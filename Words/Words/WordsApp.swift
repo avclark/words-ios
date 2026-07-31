@@ -49,6 +49,11 @@ struct RootView: View {
     /// Root tab selection — owned here so notification deep-links can
     /// switch tabs (a friend-request tap lands on the Friends tab).
     @State private var selectedTab: AppTab = .home
+    /// Home's navigation path (Match History push). Owned HERE, not in
+    /// HomeView: opening a game swaps the tab shell out at the root,
+    /// which would destroy HomeView-local state — held here, backing out
+    /// of a game opened from Match History returns to Match History.
+    @State private var homePath: [HomeView.Destination] = []
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.theme) private var theme
 
@@ -274,6 +279,7 @@ struct RootView: View {
                         HomeView(profile: $profile,
                                  store: store,
                                  friends: friends,
+                                 path: $homePath,
                                  onShowFriends: { selectedTab = .friends },
                                  onShowProfile: { selectedTab = .profile },
                                  onOpen: { open($0) },
@@ -324,6 +330,7 @@ struct RootView: View {
     private func sessionDidChange(userID: UUID?) {
         activeGame = nil
         selectedTab = .home
+        homePath = []
         guard let userID else {
             store = nil
             sync = nil

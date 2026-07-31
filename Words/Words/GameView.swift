@@ -117,8 +117,10 @@ struct GameView: View {
             }
             // Game over is an overlay, not a view swap: the board hierarchy
             // must never be torn down while a gesture could be live.
-            // Its appearance IS the result acknowledgment (Phase 12) —
-            // seeing this screen is what moves the game to Past games.
+            // Its appearance still marks the result acknowledged
+            // (Phase 12) — the mechanism is kept for a possible future
+            // feature, though finished games now live in Match History
+            // regardless of acknowledgment.
             // "Review game" dismisses it into the interactive finished
             // board (tap words for definitions, open the analysis,
             // return via the Result button).

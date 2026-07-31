@@ -24,7 +24,9 @@ struct SavedGame: Identifiable, Codable {
     /// Phase 11: opponent chat messages newer than my read marker.
     var unreadChat: Int? = nil
     /// Phase 12: the local player has SEEN the result (the game-over
-    /// screen appeared). Seen + finished = the game lives in Past games.
+    /// screen appeared). Kept in sync (local + server) for a possible
+    /// future feature, but it no longer decides which screen a game
+    /// appears on — finished games go straight to Match History.
     var resultSeen: Bool? = nil
     /// Phase 12: per-game hint spends (see HintBudget).
     var hintPlacementsUsed: Int? = nil
@@ -57,9 +59,11 @@ struct SavedGame: Identifiable, Codable {
         return turnState == .local ? .yourTurn : .waiting
     }
 
-    /// Past games = finished AND acknowledged (result seen). Presentation
-    /// only — stats always draw on every finished game.
-    var isArchived: Bool { gameOver != nil && resultSeen == true }
+    /// Match History = every finished game, the moment it finishes.
+    /// (Formerly also required resultSeen — that gate is gone; the
+    /// acknowledgment mechanism remains but is presentation-irrelevant.)
+    /// Presentation only — stats always draw on every finished game.
+    var isArchived: Bool { gameOver != nil }
 }
 
 /// File-per-game store under Application Support. Loads everything at
@@ -118,11 +122,11 @@ final class GameStore {
         }
     }
 
-    /// The main lobby: everything except archived (seen-and-finished) games.
+    /// The main lobby: active games only (your turn / their turn).
     var currentGames: [SavedGame] { lobbyOrder.filter { !$0.isArchived } }
 
-    /// Past games, most recent first.
-    var pastGames: [SavedGame] {
+    /// Match History: every finished game, most recent first.
+    var matchHistory: [SavedGame] {
         games.filter(\.isArchived).sorted { $0.updatedAt > $1.updatedAt }
     }
 

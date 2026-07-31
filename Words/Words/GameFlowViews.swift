@@ -56,8 +56,9 @@ struct SwapView: View {
 
 /// The result screen, shown as an overlay so the board hierarchy
 /// underneath is never torn down (see CLAUDE.md invariant 2). Its
-/// appearance IS the result acknowledgment (Phase 12): the owner marks
-/// the game seen, moving it to Past games. "Review game" dismisses the
+/// appearance still marks the result acknowledged (Phase 12; kept for a
+/// possible future feature — placement no longer depends on it: finished
+/// games live in Match History regardless). "Review game" dismisses the
 /// overlay into the interactive finished board; "Review" analysis lives
 /// behind onAnalyze (nil = unavailable, e.g. pre-server local games).
 struct GameOverView: View {

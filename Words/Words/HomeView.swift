@@ -6,11 +6,25 @@ import SwiftUI
 /// selection). Deliberately restrained styling — the full design pass
 /// comes later.
 struct HomeView: View {
+    /// Screens pushed under Home. Match History is deliberately a pushed
+    /// detail (NOT a tab, reachable only from the Home row): being in
+    /// the navigation hierarchy is what makes "back out of a game opened
+    /// from Match History" land on Match History, not Home.
+    enum Destination: Hashable {
+        case matchHistory
+    }
+
     @Environment(\.theme) private var theme
 
     @Binding var profile: PlayerProfile
     let store: GameStore
     let friends: FriendsStore
+    /// Home's navigation path — owned by RootView, NOT local state:
+    /// opening a game swaps the whole tab shell out at the root, which
+    /// destroys HomeView's local state. Held upstream, the pushed
+    /// Match History screen survives the game and is restored when the
+    /// game exits.
+    @Binding var path: [Destination]
     /// Header shortcuts to the Friends / Profile tabs.
     let onShowFriends: () -> Void
     let onShowProfile: () -> Void
@@ -19,21 +33,43 @@ struct HomeView: View {
     let onChallenge: (RemoteGames.FriendDTO) -> Void
 
     @State private var showNewGameSetup = false
-    @State private var showPastGames = false
     @State private var deleteError: String?
 
     var body: some View {
+        NavigationStack(path: $path) {
+            homeContent
+                .navigationDestination(for: Destination.self) { destination in
+                    switch destination {
+                    case .matchHistory:
+                        MatchHistoryView(store: store,
+                                         onOpen: { onOpen($0) },
+                                         onDelete: { deleteGame($0) })
+                    }
+                }
+        }
+        // On the stack, not the content: the delete alert must present
+        // even while Match History is the visible screen.
+        .alert("Couldn't delete game",
+               isPresented: .init(get: { deleteError != nil },
+                                  set: { if !$0 { deleteError = nil } })) {
+            Button("OK") { deleteError = nil }
+        } message: {
+            Text(deleteError ?? "")
+        }
+    }
+
+    private var homeContent: some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 20)
+                .padding(.horizontal, theme.metrics.screenHPadding)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
             WordOfTheDayView()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, theme.metrics.screenHPadding)
                 .padding(.bottom, 8)
 
-            if store.currentGames.isEmpty && store.pastGames.isEmpty {
+            if store.currentGames.isEmpty && store.matchHistory.isEmpty {
                 emptyState
             } else {
                 gameList
@@ -52,13 +88,16 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity, minHeight: 50)
                     .background(Capsule().fill(theme.chrome.buttonPrimary))
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, theme.metrics.screenHPadding)
             .padding(.top, 8)
             // Breathing room above the tab bar so the button and the
             // tabs don't read as one cluster.
             .padding(.bottom, 10)
         }
         .background(theme.chrome.screenBackground.ignoresSafeArea())
+        // Home draws its own header; no empty system bar above it. The
+        // pushed Match History screen shows its bar (standard back).
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showNewGameSetup) {
             NewGameSetupSheet(friends: friends) { choice in
                 showNewGameSetup = false
@@ -67,18 +106,6 @@ struct HomeView: View {
                 case .friend(let friend): onChallenge(friend)
                 }
             }
-        }
-        .sheet(isPresented: $showPastGames) {
-            PastGamesView(store: store,
-                          onOpen: { showPastGames = false; onOpen($0) },
-                          onDelete: { deleteGame($0) })
-        }
-        .alert("Couldn't delete game",
-               isPresented: .init(get: { deleteError != nil },
-                                  set: { if !$0 { deleteError = nil } })) {
-            Button("OK") { deleteError = nil }
-        } message: {
-            Text(deleteError ?? "")
         }
     }
 
@@ -128,49 +155,92 @@ struct HomeView: View {
         }
     }
 
+    /// The lobby buckets, in display order, labeled — only non-empty
+    /// groups render. Active games only: finished games live in Match
+    /// History from the moment they finish.
+    private var lobbyGroups: [(label: String, games: [SavedGame])] {
+        let current = store.currentGames
+        return [("YOUR TURN", current.filter { $0.phase == .yourTurn }),
+                ("THEIR TURN", current.filter { $0.phase == .waiting })]
+            .filter { !$0.1.isEmpty }
+    }
+
+    /// Row content sits at the screen margin plus the standard card
+    /// interior padding, so the row cards align with every other
+    /// screen's content column.
+    private var rowInsets: EdgeInsets {
+        EdgeInsets(top: 6,
+                   leading: theme.metrics.screenHPadding + theme.metrics.cardPadding,
+                   bottom: 6,
+                   trailing: theme.metrics.screenHPadding + theme.metrics.cardPadding)
+    }
+
+    /// The row's card background, held to the shared screen margin
+    /// (list row backgrounds otherwise span edge-to-edge).
+    private func rowBackground(fill: Color) -> some View {
+        RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
+            .fill(fill)
+            .padding(.vertical, 4)
+            .padding(.horizontal, theme.metrics.screenHPadding)
+    }
+
+    /// Group label, same section-title idiom as the other screens.
+    private func sectionHeader(_ label: String) -> some View {
+        Text(label)
+            .font(theme.typography.sectionTitle)
+            .kerning(1)
+            .foregroundStyle(theme.chrome.ink.opacity(0.4))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 8,
+                                      leading: theme.metrics.screenHPadding,
+                                      bottom: 2,
+                                      trailing: theme.metrics.screenHPadding))
+    }
+
     private var gameList: some View {
         List {
-            ForEach(store.currentGames) { game in
-                Button {
-                    onOpen(game)
-                } label: {
-                    GameRow(game: game)
-                }
-                .listRowBackground(
-                    RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
-                        .fill(theme.chrome.cardFill)
-                        .padding(.vertical, 4)
-                )
-                .listRowSeparator(.hidden)
-                .swipeActions(edge: .trailing) {
-                    // Active human games can't be deleted — that would be
-                    // silent abandonment; resign first. (Server enforces
-                    // this too via 'resign_first'.)
-                    if game.gameOver != nil || game.opponentIsHuman != true {
-                        Button(role: .destructive) {
-                            deleteGame(game)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
+            ForEach(lobbyGroups, id: \.label) { group in
+                sectionHeader(group.label)
+                ForEach(group.games) { game in
+                    Button {
+                        onOpen(game)
+                    } label: {
+                        GameRow(game: game)
+                    }
+                    .listRowBackground(rowBackground(fill: theme.chrome.cardFill))
+                    .listRowInsets(rowInsets)
+                    .listRowSeparator(.hidden)
+                    .swipeActions(edge: .trailing) {
+                        // Active human games can't be deleted — that would be
+                        // silent abandonment; resign first. (Server enforces
+                        // this too via 'resign_first'.)
+                        if game.gameOver != nil || game.opponentIsHuman != true {
+                            Button(role: .destructive) {
+                                deleteGame(game)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                     }
                 }
             }
 
-            // Finished games whose result has been SEEN live here — out
-            // of the way, never gone (Phase 12). Stats count them all.
-            if !store.pastGames.isEmpty {
+            // Every finished game lives here — out of the way, never
+            // gone. Stats count them all.
+            if !store.matchHistory.isEmpty {
                 Button {
-                    showPastGames = true
+                    path.append(.matchHistory)
                 } label: {
                     HStack {
                         Image(systemName: "archivebox")
                             .font(.system(size: 14))
                             .foregroundStyle(theme.chrome.ink.opacity(0.5))
-                        Text("Past games")
+                        Text("Match History")
                             .font(theme.typography.font(14, .semibold))
                             .foregroundStyle(theme.chrome.ink.opacity(0.7))
                         Spacer()
-                        Text("\(store.pastGames.count)")
+                        Text("\(store.matchHistory.count)")
                             .font(theme.typography.font(13, .bold))
                             .foregroundStyle(theme.chrome.ink.opacity(0.4))
                         Image(systemName: "chevron.right")
@@ -182,11 +252,8 @@ struct HomeView: View {
                     .contentShape(Rectangle())
                     .padding(.vertical, 8)
                 }
-                .listRowBackground(
-                    RoundedRectangle(cornerRadius: theme.metrics.rowCornerRadius, style: .continuous)
-                        .fill(theme.chrome.ink.opacity(0.03))
-                        .padding(.vertical, 4)
-                )
+                .listRowBackground(rowBackground(fill: theme.chrome.ink.opacity(0.03)))
+                .listRowInsets(rowInsets)
                 .listRowSeparator(.hidden)
             }
         }
@@ -302,41 +369,38 @@ private struct GameRow: View {
     }
 }
 
-// MARK: - Past games (Phase 12)
+// MARK: - Match History (Phase 12; renamed from "Past games")
 
-/// The archive: finished games whose result the player has acknowledged.
-/// Everything still opens (result overlay → review → rematch) and the
-/// same swipe-delete semantics apply as in the lobby. Purely a
-/// presentation split — profile stats draw on all finished games.
-private struct PastGamesView: View {
+/// Match History: every finished game, from the moment it finishes.
+/// A PUSHED detail screen under Home (navigationDestination), never a
+/// sheet — being on Home's stack is what makes backing out of a game
+/// opened from here return HERE. Everything still opens (result overlay
+/// → review → rematch) and the same swipe-delete semantics apply as in
+/// the lobby. Purely a presentation split — profile stats draw on all
+/// finished games.
+private struct MatchHistoryView: View {
     @Environment(\.theme) private var theme
 
     let store: GameStore
     let onOpen: (SavedGame) -> Void
     let onDelete: (SavedGame) -> Void
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("PAST GAMES")
+                Text("MATCH HISTORY")
                     .font(theme.typography.font(15, .black))
                     .kerning(1.5)
                     .foregroundStyle(theme.chrome.textPrimary)
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(theme.chrome.ink.opacity(0.3))
-                }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, theme.metrics.screenHPadding)
             .padding(.top, 20)
             .padding(.bottom, 8)
 
-            if store.pastGames.isEmpty {
+            if store.matchHistory.isEmpty {
                 // Deleting the last one shouldn't leave a blank sheet.
-                Text("No past games — finished games land here once you've seen the result.")
+                Text("No finished games yet — every game lands here when it ends.")
                     .font(theme.typography.font(13, .regular))
                     .foregroundStyle(theme.chrome.ink.opacity(0.4))
                     .multilineTextAlignment(.center)
@@ -344,7 +408,7 @@ private struct PastGamesView: View {
                 Spacer()
             } else {
                 List {
-                    ForEach(store.pastGames) { game in
+                    ForEach(store.matchHistory) { game in
                         Button {
                             onOpen(game)
                         } label: {
@@ -370,8 +434,6 @@ private struct PastGamesView: View {
             }
         }
         .background(theme.chrome.screenBackground.ignoresSafeArea())
-        .presentationDetents([.large])
-        .presentationBackground(theme.chrome.screenBackground)
     }
 }
 

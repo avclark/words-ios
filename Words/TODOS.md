@@ -14,6 +14,9 @@
 
 - Word of the day feature / slide down definition (like NTY)
 
+## Game Screen
+- The green score count when playing a word is too big - it covers up too much of the tiles
+
 ## App screens
 - Sign in/up
 - Home

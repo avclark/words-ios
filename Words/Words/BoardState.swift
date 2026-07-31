@@ -143,10 +143,11 @@ final class BoardState {
     /// Set when a blank tile lands on the board and needs a letter.
     var pendingBlank: BoardCoord?
 
-    /// Phase 12: has the local player SEEN this game's result? Finished
-    /// games move to Past games only after acknowledgment (the game-over
-    /// screen appearing) — never on a timer. Synced to the server so the
-    /// archive survives reinstall; stats are untouched either way.
+    /// Phase 12: has the local player SEEN this game's result (the
+    /// game-over screen appeared)? Synced to the server. Kept for a
+    /// possible future feature — it no longer decides which screen a
+    /// game appears on (finished games go straight to Match History);
+    /// stats are untouched either way.
     private(set) var resultSeen = false
 
     /// Phase 12 hints. Highlights are transient UI (never persisted);
@@ -392,10 +393,12 @@ final class BoardState {
 
     // MARK: - Result acknowledgment (Phase 12)
 
-    /// The game-over screen was shown — the result is officially SEEN and
-    /// the game can move to Past games. Returns true exactly once so the
-    /// caller knows to sync the acknowledgment (GameView fires the RPC;
-    /// this class stays network-free).
+    /// The game-over screen was shown — the result is officially SEEN.
+    /// (No longer moves the game anywhere — finished games live in Match
+    /// History regardless; the mark is kept for a possible future
+    /// feature.) Returns true exactly once so the caller knows to sync
+    /// the acknowledgment (GameView fires the RPC; this class stays
+    /// network-free).
     @discardableResult
     func markResultSeen() -> Bool {
         guard gameOver != nil, !resultSeen else { return false }

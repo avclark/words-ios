@@ -532,8 +532,10 @@ enum RemoteGames {
 
     // MARK: - Result acknowledgment & review (Phase 12)
 
-    /// The local player saw the game-over screen: the game can move to
-    /// Past games on every device. Idempotent; no-op on active games.
+    /// The local player saw the game-over screen — synced so the mark
+    /// follows the account. (Presentation no longer depends on it;
+    /// kept for a possible future feature.) Idempotent; no-op on
+    /// active games.
     static func markResultSeen(gameID: UUID) async throws {
         struct P: Encodable { let p_game_id: UUID }
         _ = try await SupabaseService.client

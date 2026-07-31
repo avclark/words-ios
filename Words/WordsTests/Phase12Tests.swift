@@ -158,7 +158,8 @@ struct ResultSeenTests {
     }
 
     /// The new fields survive a snapshot → restore round trip, and
-    /// isArchived = finished + seen.
+    /// isArchived = finished (Match History holds every finished game
+    /// immediately; resultSeen no longer gates placement).
     @Test func snapshotRoundTripAndArchiveRule() {
         let source = BoardState()
         let moves = AIPlayer.topMoves(board: [:], rack: source.rack, limit: 5)
@@ -177,12 +178,12 @@ struct ResultSeenTests {
             #expect(restored.hintPlacementsLeft == HintBudget.placements - 1)
         }
 
-        // Unseen finished games stay in the lobby.
+        // Finished games are archived the moment they finish — the
+        // acknowledgment mark is irrelevant to placement now.
         var unseen = saved
         unseen.resultSeen = nil
-        #expect(unseen.isArchived == false)
-        // Seen-but-active can't happen (markResultSeen guards), but the
-        // rule itself must require BOTH.
+        #expect(unseen.isArchived == true)
+        // Active games are never archived, seen mark or not.
         var active = saved
         active.gameOver = nil
         #expect(active.isArchived == false)
