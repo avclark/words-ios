@@ -42,3 +42,5 @@
     - Sign out
     - Account deletion
     - Terms / Legal / Privacy
+
+Streaks page

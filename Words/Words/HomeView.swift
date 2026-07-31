@@ -493,8 +493,6 @@ struct ProfileEditorSheet: View {
     @State private var confirmingDelete = false
     @State private var prefs: RemoteGames.NotificationPrefs?
     @State private var prefsLoadFailed = false
-    @State private var blocked: [RemoteGames.BlockedUser] = []
-    @State private var unblockNotice: String?
     @State private var username = ""
     @State private var savedUsername: String?
     @State private var usernameFeedback: (text: String, good: Bool)?
@@ -560,8 +558,6 @@ struct ProfileEditorSheet: View {
             Divider().overlay(theme.chrome.border)
 
             notificationSection
-
-            blockedSection
 
             Divider().overlay(theme.chrome.border)
 
@@ -663,7 +659,6 @@ struct ProfileEditorSheet: View {
             // Say so — an empty section is indistinguishable from broken.
             prefsLoadFailed = true
         }
-        blocked = (try? await RemoteGames.listBlocked()) ?? []
         if let existing = try? await RemoteGames.fetchUsername(userID: userID) {
             savedUsername = existing
             username = existing ?? ""
@@ -721,46 +716,8 @@ struct ProfileEditorSheet: View {
             .tint(theme.chrome.accent)
     }
 
-    @ViewBuilder
-    private var blockedSection: some View {
-        if !blocked.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("BLOCKED PLAYERS")
-                    .font(theme.typography.sectionTitle)
-                    .kerning(1)
-                    .foregroundStyle(theme.chrome.ink.opacity(0.4))
-                ForEach(blocked) { user in
-                    HStack {
-                        Text(user.displayName)
-                            .font(theme.typography.body)
-                            .foregroundStyle(theme.chrome.ink.opacity(0.7))
-                        Spacer()
-                        Button("Unblock") {
-                            let name = user.displayName
-                            Task {
-                                try? await RemoteGames.unblockUser(user.userID)
-                                blocked.removeAll { $0.userID == user.userID }
-                                unblockNotice = "\(name) is unblocked. Blocking ended your friendship, so you're not friends again automatically — send a friend request or share your invite link if you want to reconnect."
-                            }
-                        }
-                        .font(theme.typography.font(12, .semibold))
-                    }
-                }
-                // The rule, stated where the action lives — never a
-                // silent "wait, what happened?" moment.
-                Text("Unblocking doesn't re-add someone as a friend.")
-                    .font(theme.typography.caption)
-                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
-            }
-            .alert("Unblocked",
-                   isPresented: .init(get: { unblockNotice != nil },
-                                      set: { if !$0 { unblockNotice = nil } })) {
-                Button("OK") { unblockNotice = nil }
-            } message: {
-                Text(unblockNotice ?? "")
-            }
-        }
-    }
+    // Blocked players moved to the Friends screen (its BLOCKED section) —
+    // Friends is the single home for the relationship lifecycle.
 
     @ViewBuilder
     private var accountSection: some View {
