@@ -210,13 +210,19 @@ func winRateText(wins: Int, losses: Int) -> String {
     return "\(Int((Double(wins) / Double(decided) * 100).rounded()))%"
 }
 
-// MARK: - Leaderboard tab
+// MARK: - Leaderboard (currently unpresented)
 
-/// The friends-only leaderboard, promoted from a FriendsView section to
-/// its own tab. Friends-only by construction: the server returns me +
-/// accepted friends, nothing else. Ranked on win rate over human games
-/// with a minimum-games floor (see Leaderboard); tapping a friend's row
-/// opens the head-to-head record.
+/// NOTE (2026-07-31): the Leaderboard TAB was removed — it didn't earn
+/// top-level nav in a friends-and-family app; head-to-head moved to the
+/// Friends screen (friend row's "…" menu). This view is intentionally
+/// left intact but UNREFERENCED (nothing presents it), along with the
+/// Phase 13 leaderboard RPCs, so it can be repurposed or fully removed
+/// later.
+///
+/// The friends-only leaderboard. Friends-only by construction: the
+/// server returns me + accepted friends, nothing else. Ranked on win
+/// rate over human games with a minimum-games floor (see Leaderboard);
+/// tapping a friend's row opens the head-to-head record.
 struct LeaderboardView: View {
     @Environment(\.theme) private var theme
 

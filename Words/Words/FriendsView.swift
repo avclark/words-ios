@@ -177,8 +177,8 @@ final class FriendsStore {
 /// lifecycle, sectioned top-to-bottom: invite → search → PENDING (only
 /// when someone awaits your answer) → REQUESTED (only when you have
 /// outgoing requests) → FRIENDS → BLOCKED (only when non-empty).
-/// People-management only — the leaderboard lives in its own tab
-/// (LeaderboardView). Minimal styling — design pass later.
+/// Also the home of head-to-head (a friend row's "…" menu) since the
+/// Leaderboard tab was removed. Minimal styling — design pass later.
 struct FriendsView: View {
     @Environment(\.theme) private var theme
 
@@ -192,6 +192,9 @@ struct FriendsView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var removalCandidate: RemoteGames.FriendDTO?
     @State private var unblockNotice: String?
+    /// Head-to-head lives here now (the Leaderboard tab is gone):
+    /// per-friend record, opened from the friend row's menu.
+    @State private var headToHeadFriend: RemoteGames.FriendDTO?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -228,6 +231,9 @@ struct FriendsView: View {
             Button("OK") { unblockNotice = nil }
         } message: {
             Text(unblockNotice ?? "")
+        }
+        .sheet(item: $headToHeadFriend) { friend in
+            HeadToHeadSheet(friend: friend)
         }
         .task {
             await store.loadInviteLink()
@@ -307,6 +313,9 @@ struct FriendsView: View {
                             onChallenge(user)
                         }
                         Menu {
+                            Button("Head-to-head record") {
+                                headToHeadFriend = user
+                            }
                             Button("Remove friend…", role: .destructive) {
                                 removalCandidate = user
                             }

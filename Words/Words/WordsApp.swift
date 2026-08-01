@@ -18,10 +18,13 @@ struct WordsApp: App {
     }
 }
 
-/// The four root tabs. The game screen is NOT a tab — it presents above
+/// The three root tabs. The game screen is NOT a tab — it presents above
 /// the whole shell (full screen, no tab bar) while a game is open.
+/// (A Leaderboard tab existed briefly; removed 2026-07-31 — it didn't
+/// earn top-level nav in a friends-and-family app. Head-to-head lives
+/// on the Friends screen now.)
 enum AppTab: Hashable {
-    case home, friends, leaderboard, profile
+    case home, friends, profile
 }
 
 /// Top-level flow: auth gate → lobby → game. Owns the per-account session
@@ -294,12 +297,6 @@ struct RootView: View {
                     )
                     .tabItem { Label("Friends", systemImage: "person.2.fill") }
                     .tag(AppTab.friends)
-
-                    tabStyled(
-                        LeaderboardView(store: friends)
-                    )
-                    .tabItem { Label("Leaderboard", systemImage: "trophy.fill") }
-                    .tag(AppTab.leaderboard)
 
                     tabStyled(
                         ProfileEditorSheet(profile: $profile, auth: auth, isTab: true)
