@@ -649,6 +649,68 @@ enum RemoteGames {
             .execute().value
     }
 
+    /// Phase 13d: the Profile hub's personal aggregations — self-only
+    /// (the RPC has no user parameter by design; reading others' stats
+    /// stays behind fetch_stats' visibility gate).
+    struct ProfileStatsPayload: Decodable {
+        struct AvgWord: Decodable {
+            let lifetime: Double?
+            let thisMonth: Double?
+            let monthly: [MonthAvg]
+
+            enum CodingKeys: String, CodingKey {
+                case lifetime, monthly
+                case thisMonth = "this_month"
+            }
+        }
+        struct MonthAvg: Decodable {
+            let month: String   // "2026-04"
+            let avg: Double
+        }
+        struct Streaks: Decodable {
+            let longest: Int
+            let current: Int
+        }
+        struct PointWords: Decodable {
+            let w50: Int
+            let w40: Int
+            let w30: Int
+        }
+        struct Bingos: Decodable {
+            let count: Int
+            let lastWord: String?
+
+            enum CodingKeys: String, CodingKey {
+                case count
+                case lastWord = "last_word"
+            }
+        }
+
+        let avgWord: AvgWord
+        let bestWord: PlayerStats.BestWord?
+        let bestGame: Int
+        let avgGame: Int
+        let wins: Int
+        let streaks: Streaks
+        let pointWords: PointWords
+        let bingos: Bingos
+
+        enum CodingKeys: String, CodingKey {
+            case wins, streaks, bingos
+            case avgWord = "avg_word"
+            case bestWord = "best_word"
+            case bestGame = "best_game"
+            case avgGame = "avg_game"
+            case pointWords = "point_words"
+        }
+    }
+
+    static func fetchProfileStats() async throws -> ProfileStatsPayload {
+        try await SupabaseService.client
+            .rpc("fetch_profile_stats")
+            .execute().value
+    }
+
     struct LeaderboardEntry: Decodable, Identifiable, Equatable {
         let userID: UUID
         let displayName: String?

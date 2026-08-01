@@ -3,15 +3,14 @@ import SwiftUI
 // MARK: - Stats data (UI shape)
 
 /// Everything the Profile stats page can show. Optional fields render as
-/// "—" when absent — REAL computation for most of these is a separate
-/// backend round.
+/// "—" when absent.
 ///
-/// Data-source status (backend round pending):
-///  • REAL source exists today (RemoteGames.fetchStats): wins (human),
-///    average game (human avg score), best game, best word.
-///  • MOCK-ONLY until the backend round: per-word average + the monthly
-///    chart, win streaks (longest/current), point-word counts
-///    (50+/40+/30+), bingos + last bingo.
+/// Data-source status: every block has a REAL source once
+/// supabase/phase13d_profile_stats.sql is applied (fetch_profile_stats —
+/// skill stats over all games, win/streak stats over human games only).
+/// Until it's pasted, the client falls back to the Phase 13 fetch_stats
+/// mapping (wins / avg game / best game / best word) and the rest show
+/// "—".
 struct ProfileStatsData {
     struct Month: Identifiable {
         let id = UUID()
@@ -231,9 +230,10 @@ struct ProfileView: View {
         }
     }
 
-    /// Mock-aware stats load. Real path maps what fetchStats provides
-    /// today (wins / avg game / best game / best word); everything else
-    /// stays nil → "—" until the backend round.
+    /// Mock-aware stats load. Real path: the Phase 13d profile-stats RPC
+    /// (every block). If that RPC isn't available yet (SQL not pasted,
+    /// or offline), fall back to the Phase 13 fetch_stats mapping so the
+    /// profile still shows what it can — never a crash, never a block.
     private func loadStats() async {
         #if DEBUG
         if Self.useMockStats {
@@ -241,6 +241,27 @@ struct ProfileView: View {
             return
         }
         #endif
+        if let full = try? await RemoteGames.fetchProfileStats() {
+            var real = ProfileStatsData()
+            real.avgWordLifetime = full.avgWord.lifetime
+            real.avgWordThisMonth = full.avgWord.thisMonth
+            real.monthlyAvgWord = full.avgWord.monthly.map {
+                .init(label: Self.monthLabel($0.month), value: $0.avg)
+            }
+            real.bestWord = full.bestWord.map { ($0.word, $0.score) }
+            real.avgGame = full.avgGame
+            real.bestGame = full.bestGame
+            real.wins = full.wins
+            real.longestStreak = full.streaks.longest
+            real.currentStreak = full.streaks.current
+            real.words50Plus = full.pointWords.w50
+            real.words40Plus = full.pointWords.w40
+            real.words30Plus = full.pointWords.w30
+            real.bingos = full.bingos.count
+            real.lastBingo = full.bingos.lastWord
+            stats = real
+            return
+        }
         guard let fetched = try? await RemoteGames.fetchStats() else { return }
         var real = ProfileStatsData()
         real.wins = fetched.human.wins
@@ -248,6 +269,14 @@ struct ProfileView: View {
         real.bestGame = fetched.bestGame
         real.bestWord = fetched.bestWord.map { ($0.word, $0.score) }
         stats = real
+    }
+
+    /// "2026-04" → "APR" (bar-chart axis label).
+    private static func monthLabel(_ isoMonth: String) -> String {
+        guard let m = Int(isoMonth.suffix(2)), (1...12).contains(m),
+              let symbols = DateFormatter().shortMonthSymbols, m <= symbols.count
+        else { return isoMonth }
+        return symbols[m - 1].uppercased()
     }
 
     // MARK: Stats blocks (layout mirrors Scrabble GO's stats page)
