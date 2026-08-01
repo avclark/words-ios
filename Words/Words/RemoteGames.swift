@@ -685,6 +685,24 @@ enum RemoteGames {
                 case lastWord = "last_word"
             }
         }
+        /// Phase 13e: "Top N%" among me + accepted friends. Each field
+        /// is nil when suppressed (population under the server floor) or
+        /// when the caller has no data for that stat — nil = no badge.
+        struct Percentiles: Decodable {
+            let population: Int
+            let avgWord: Int?
+            let bestWord: Int?
+            let bestGame: Int?
+            let wins: Int?
+            let bingos: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case population, wins, bingos
+                case avgWord = "avg_word"
+                case bestWord = "best_word"
+                case bestGame = "best_game"
+            }
+        }
 
         let avgWord: AvgWord
         let bestWord: PlayerStats.BestWord?
@@ -694,9 +712,11 @@ enum RemoteGames {
         let streaks: Streaks
         let pointWords: PointWords
         let bingos: Bingos
+        /// Absent until phase13e is applied server-side.
+        let percentiles: Percentiles?
 
         enum CodingKeys: String, CodingKey {
-            case wins, streaks, bingos
+            case wins, streaks, bingos, percentiles
             case avgWord = "avg_word"
             case bestWord = "best_word"
             case bestGame = "best_game"

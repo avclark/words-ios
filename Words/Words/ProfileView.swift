@@ -32,6 +32,15 @@ struct ProfileStatsData {
     var words30Plus: Int?
     var bingos: Int?
     var lastBingo: String?
+
+    // Phase 13e friends-percentiles ("Top N%", lower is better). nil =
+    // no badge: suppressed below the server's population floor, no data
+    // for the stat, or the 13e SQL not applied yet.
+    var avgWordPct: Int?
+    var bestWordPct: Int?
+    var bestGamePct: Int?
+    var winsPct: Int?
+    var bingosPct: Int?
 }
 
 // MARK: - Profile hub
@@ -68,7 +77,12 @@ struct ProfileView: View {
         words40Plus: 11,
         words30Plus: 26,
         bingos: 9,
-        lastBingo: "RETAINS"
+        lastBingo: "RETAINS",
+        avgWordPct: 10,
+        bestWordPct: 25,
+        bestGamePct: 25,
+        winsPct: 40,
+        bingosPct: 50
     )
     #endif
 
@@ -259,6 +273,11 @@ struct ProfileView: View {
             real.words30Plus = full.pointWords.w30
             real.bingos = full.bingos.count
             real.lastBingo = full.bingos.lastWord
+            real.avgWordPct = full.percentiles?.avgWord
+            real.bestWordPct = full.percentiles?.bestWord
+            real.bestGamePct = full.percentiles?.bestGame
+            real.winsPct = full.percentiles?.wins
+            real.bingosPct = full.percentiles?.bingos
             stats = real
             return
         }
@@ -285,9 +304,12 @@ struct ProfileView: View {
         section("STATS") {
             averageWordCard
             bestWordCard
-            twoUp(("AVERAGE GAME", figure(stats.avgGame)),
-                  ("BEST GAME", figure(stats.bestGame)))
-            statCard("WINS", figure(stats.wins), detail: nil)
+            HStack(spacing: 10) {
+                statCard("AVERAGE GAME", figure(stats.avgGame), detail: nil)
+                statCard("BEST GAME", figure(stats.bestGame), detail: nil,
+                         badge: stats.bestGamePct)
+            }
+            statCard("WINS", figure(stats.wins), detail: nil, badge: stats.winsPct)
             twoUp(("LONGEST WIN STREAK", figure(stats.longestStreak)),
                   ("CURRENT WIN STREAK", figure(stats.currentStreak)))
             pointWordsCard
@@ -295,10 +317,32 @@ struct ProfileView: View {
         }
     }
 
+    /// The Phase 13e friends-percentile badge — rendered only when a
+    /// percentile exists (nil = suppressed/no data = no badge at all).
+    private func topBadge(_ pct: Int) -> some View {
+        Text("TOP \(pct)%")
+            .font(theme.typography.font(9, .heavy))
+            .kerning(0.5)
+            .foregroundStyle(theme.chrome.onAccent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(theme.chrome.accent))
+    }
+
+    /// A stat label with its optional percentile badge alongside.
+    private func labelRow(_ text: String, badge: Int?) -> some View {
+        HStack(spacing: 6) {
+            statLabel(text)
+            if let badge {
+                topBadge(badge)
+            }
+        }
+    }
+
     /// Average word score: this month, the monthly bar chart, lifetime.
     private var averageWordCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            statLabel("AVERAGE WORD SCORE")
+            labelRow("AVERAGE WORD SCORE", badge: stats.avgWordPct)
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(stats.avgWordThisMonth.map { String(format: "%.1f", $0) } ?? "—")
@@ -352,7 +396,7 @@ struct ProfileView: View {
 
     private var bestWordCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            statLabel("BEST WORD")
+            labelRow("BEST WORD", badge: stats.bestWordPct)
             if let best = stats.bestWord {
                 WordTileDisplay(word: best.word)
                 Text("+\(best.score)")
@@ -383,7 +427,7 @@ struct ProfileView: View {
 
     private var bingosCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            statLabel("BINGOS")
+            labelRow("BINGOS", badge: stats.bingosPct)
             Text(figure(stats.bingos))
                 .font(theme.typography.font(18, .black))
                 .foregroundStyle(theme.chrome.accent)
@@ -410,9 +454,10 @@ struct ProfileView: View {
         }
     }
 
-    private func statCard(_ label: String, _ value: String, detail: String?) -> some View {
+    private func statCard(_ label: String, _ value: String, detail: String?,
+                          badge: Int? = nil) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            statLabel(label)
+            labelRow(label, badge: badge)
             Text(value)
                 .font(theme.typography.font(18, .black))
                 .foregroundStyle(theme.chrome.accent)
