@@ -299,7 +299,7 @@ struct RootView: View {
                     .tag(AppTab.friends)
 
                     tabStyled(
-                        ProfileEditorSheet(profile: $profile, auth: auth, isTab: true)
+                        ProfileView(profile: $profile, auth: auth)
                     )
                     .tabItem { Label("Profile", systemImage: "person.crop.circle.fill") }
                     .tag(AppTab.profile)

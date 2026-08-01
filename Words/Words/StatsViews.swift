@@ -47,9 +47,13 @@ enum Leaderboard {
 
 // MARK: - Personal stats sheet
 
-/// "Your stats" — reached from the profile sheet, deliberately its own
-/// sheet so the profile doesn't grow another section. Restrained styling;
-/// the design pass is next.
+/// NOTE (2026-07-31): currently UNREFERENCED — the Profile tab now shows
+/// its stats inline (ProfileView), so nothing presents this sheet. Left
+/// intact (its fetchStats mapping is the real-data path the stats
+/// backend round will build on); repurpose or remove later.
+///
+/// "Your stats" — was reached from the profile sheet. Restrained
+/// styling; the design pass is next.
 struct StatsSheet: View {
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
