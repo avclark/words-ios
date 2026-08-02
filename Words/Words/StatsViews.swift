@@ -306,7 +306,9 @@ struct LeaderboardView: View {
                     .font(theme.typography.font(13, .heavy))
                     .foregroundStyle(rank == 1 ? theme.chrome.accent : theme.chrome.ink.opacity(0.4))
                     .frame(width: 30, alignment: .leading)
-                AvatarCircle(avatar: Avatar(rawValue: entry.avatar ?? "") ?? .star, size: 32)
+                AvatarView(name: entry.displayName ?? "Player",
+                           photoURL: AvatarView.publicAvatarURL(for: entry.userID),
+                           size: 32)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.me ? "You" : (entry.displayName ?? "Player"))
                         .font(theme.typography.font(14, .semibold))

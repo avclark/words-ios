@@ -339,7 +339,7 @@ struct FriendsView: View {
         if !store.blocked.isEmpty {
             section("BLOCKED") {
                 ForEach(store.blocked) { user in
-                    row(avatar: Avatar(rawValue: user.avatar ?? "") ?? .star,
+                    row(userID: user.userID,
                         name: user.displayName,
                         username: nil) {
                         smallButton("Unblock") {
@@ -460,7 +460,7 @@ struct FriendsView: View {
 
     private func row(_ user: RemoteGames.FriendDTO,
                      @ViewBuilder trailing: () -> some View) -> some View {
-        row(avatar: Avatar(rawValue: user.avatar ?? "") ?? .star,
+        row(userID: user.userID,
             name: user.displayName,
             username: user.username,
             trailing: trailing)
@@ -468,10 +468,12 @@ struct FriendsView: View {
 
     /// The one person-row shape (avatar · name · @username · action),
     /// shared by every section — blocked rows included.
-    private func row(avatar: Avatar, name: String, username: String?,
+    private func row(userID: UUID?, name: String, username: String?,
                      @ViewBuilder trailing: () -> some View) -> some View {
         HStack(spacing: 10) {
-            AvatarCircle(avatar: avatar, size: 36)
+            AvatarView(name: name,
+                       photoURL: userID.flatMap(AvatarView.publicAvatarURL(for:)),
+                       size: 36)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name)
                     .font(theme.typography.font(14, .semibold))

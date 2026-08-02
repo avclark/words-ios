@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 // MARK: - Stats data (UI shape)
 
@@ -98,6 +99,15 @@ struct ProfileView: View {
     @State private var savedUsername: String?
     @State private var usernameFeedback: (text: String, good: Bool)?
     @State private var savingUsername = false
+    // Avatar: photo pick/take → crop → upload, plus the palette picker.
+    @State private var showAvatarMenu = false
+    @State private var showCamera = false
+    @State private var showPhotoPicker = false
+    @State private var showPalettePicker = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var cropRequest: CropRequest?
+    @State private var uploadingAvatar = false
+    @State private var avatarError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -133,9 +143,106 @@ struct ProfileView: View {
         .sheet(isPresented: $showSettings) {
             SettingsSheet(auth: auth)
         }
+        .confirmationDialog("Your avatar", isPresented: $showAvatarMenu,
+                            titleVisibility: .visible) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") { showCamera = true }
+            }
+            Button("Choose Photo") { showPhotoPicker = true }
+            Button("Choose Colors") { showPalettePicker = true }
+            if !(profile.avatarURL ?? "").isEmpty {
+                Button("Remove Photo", role: .destructive) { removePhoto() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem,
+                      matching: .images)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            photoItem = nil
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    cropRequest = CropRequest(image: image)
+                } else {
+                    avatarError = "Couldn't load that photo — try another."
+                }
+            }
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in
+                cropRequest = CropRequest(image: image)
+            }
+            .ignoresSafeArea()
+        }
+        // sheet(item:) — the app's safe presentation pattern (never a
+        // bool-flipped optional gate; see the blank-sheet bug notes).
+        .sheet(item: $cropRequest) { request in
+            AvatarCropView(image: request.image) { cropped in
+                uploadAvatar(cropped)
+            }
+        }
+        .sheet(isPresented: $showPalettePicker) {
+            PalettePickerSheet(profile: $profile) { palette in
+                selectPalette(palette)
+            }
+        }
         .task {
             await loadIdentity()
             await loadStats()
+        }
+    }
+
+    /// Identifiable wrapper so the crop sheet uses sheet(item:).
+    struct CropRequest: Identifiable {
+        let id = UUID()
+        let image: UIImage
+    }
+
+    private func uploadAvatar(_ image: UIImage) {
+        guard let userID = auth.signedInUserID else {
+            avatarError = "Sign in to upload a photo."
+            return
+        }
+        avatarError = nil
+        uploadingAvatar = true
+        Task {
+            defer { uploadingAvatar = false }
+            do {
+                // The profile binding change flows through RootView's
+                // onChange → LocalProfile.save + the server push.
+                let urlString = try await AvatarUploader.upload(image, for: userID)
+                // Seed the shared store so every mounted avatar shows
+                // the new photo instantly — no fetch round-trip.
+                if let url = URL(string: urlString) {
+                    AvatarImageStore.shared.seed(image, for: url)
+                }
+                profile.avatarURL = urlString
+            } catch {
+                avatarError = "Couldn't upload your photo — check your connection and try again."
+            }
+        }
+    }
+
+    /// Picking monogram colors means "I want the monogram now": set the
+    /// palette AND drop any photo (profile + the stored bucket object),
+    /// same as Remove Photo.
+    private func selectPalette(_ palette: AvatarPalette) {
+        profile.avatarPalette = palette.rawValue
+        if !(profile.avatarURL ?? "").isEmpty {
+            removePhoto()
+        }
+    }
+
+    private func removePhoto() {
+        guard let userID = auth.signedInUserID else { return }
+        avatarError = nil
+        // "" = EXPLICITLY no photo (vs nil = unknown → AvatarView would
+        // derive the bucket slot and resurrect the old image). Synced to
+        // the profile like any other edit.
+        profile.avatarURL = ""
+        Task {
+            try? await AvatarUploader.removePhoto(for: userID)
         }
     }
 
@@ -144,22 +251,33 @@ struct ProfileView: View {
     private var identitySection: some View {
         section("IDENTITY") {
             VStack(spacing: 12) {
-                // Avatar slot: the existing icon picker stands in until
-                // photo avatars (a separate future round).
-                HStack(spacing: 10) {
-                    ForEach(Avatar.humanChoices, id: \.self) { avatar in
-                        Button {
-                            profile.avatar = avatar
-                        } label: {
-                            AvatarCircle(avatar: avatar, size: 36)
-                                .overlay(
-                                    Circle().strokeBorder(profile.avatar == avatar ? theme.chrome.accent : .clear,
-                                                          lineWidth: theme.metrics.selectionBorder)
-                                )
+                // The avatar slot: photo when uploaded, duotone monogram
+                // otherwise. Tap to change photo or monogram colors.
+                Button {
+                    showAvatarMenu = true
+                } label: {
+                    ZStack {
+                        AvatarView(profile: profile, size: 84)
+                        if uploadingAvatar {
+                            ProgressView()
+                                .tint(theme.chrome.ink.opacity(0.8))
                         }
                     }
                 }
+                .disabled(uploadingAvatar)
                 .frame(maxWidth: .infinity)
+
+                Text("Tap your avatar to add a photo or change your colors.")
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
+                    .frame(maxWidth: .infinity)
+
+                if let avatarError {
+                    Text(avatarError)
+                        .font(theme.typography.font(11, .regular))
+                        .foregroundStyle(theme.chrome.error)
+                        .frame(maxWidth: .infinity)
+                }
 
                 TextField("Your name", text: $profile.displayName)
                     .textFieldStyle(.roundedBorder)
@@ -510,6 +628,82 @@ struct ProfileView: View {
                 .kerning(1)
                 .foregroundStyle(theme.chrome.ink.opacity(0.4))
             content()
+        }
+    }
+}
+
+// MARK: - Palette picker
+
+/// The curated duotone options for the monogram (Canva-style named
+/// presets, not a color picker). "Auto" returns to the name-derived
+/// palette. Selection goes through onSelect (the owner also clears any
+/// photo — picking colors means "monogram now"); the choice persists on
+/// the profile (avatar_palette) via the normal profile push.
+private struct PalettePickerSheet: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var profile: PlayerProfile
+    let onSelect: (AvatarPalette) -> Void
+
+    private var current: AvatarPalette {
+        profile.avatarPalette.flatMap(AvatarPalette.init(rawValue:)) ?? .auto
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("MONOGRAM COLORS")
+                        .font(theme.typography.font(15, .black))
+                        .kerning(1.5)
+                        .foregroundStyle(theme.chrome.textPrimary)
+                    Spacer()
+                    Button("Done") { dismiss() }
+                        .font(theme.typography.font(14, .semibold))
+                }
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3),
+                          spacing: 14) {
+                    paletteCell(.auto, label: "Auto",
+                                rendered: AvatarPalette.derived(from: profile.displayName))
+                    ForEach(AvatarPalette.curated, id: \.self) { palette in
+                        paletteCell(palette, label: palette.label, rendered: palette)
+                    }
+                }
+
+                Text("Auto picks colors from your name. Final palettes are still being designed — these are starters.")
+                    .font(theme.typography.caption)
+                    .foregroundStyle(theme.chrome.ink.opacity(0.3))
+            }
+            .padding(theme.metrics.screenHPadding)
+        }
+        .background(theme.chrome.screenBackground.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+        .presentationBackground(theme.chrome.screenBackground)
+    }
+
+    private func paletteCell(_ palette: AvatarPalette, label: String,
+                             rendered: AvatarPalette) -> some View {
+        Button {
+            onSelect(palette)
+        } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle().fill(rendered.colors.background)
+                    Text(AvatarView.initials(from: profile.displayName))
+                        .font(theme.typography.font(20, .heavy))
+                        .foregroundStyle(rendered.colors.letter)
+                }
+                .frame(width: 52, height: 52)
+                .overlay(
+                    Circle().strokeBorder(current == palette ? theme.chrome.accent : .clear,
+                                          lineWidth: theme.metrics.selectionBorder)
+                )
+                Text(label)
+                    .font(theme.typography.font(11, .semibold))
+                    .foregroundStyle(theme.chrome.ink.opacity(current == palette ? 0.9 : 0.5))
+            }
         }
     }
 }

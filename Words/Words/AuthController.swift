@@ -151,11 +151,17 @@ final class AuthController {
         var id: UUID
         var displayName: String
         var avatar: String
+        /// Phase 13f avatar columns — optional so decode tolerates a
+        /// server that hasn't applied the migration yet.
+        var avatarURL: String?
+        var avatarPalette: String?
 
         enum CodingKeys: String, CodingKey {
             case id
             case displayName = "display_name"
             case avatar
+            case avatarURL = "avatar_url"
+            case avatarPalette = "avatar_palette"
         }
     }
 
@@ -182,30 +188,54 @@ final class AuthController {
                 let localName = local.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
                 remote.displayName = appleName ?? (localName.isEmpty ? "Player" : localName)
                 remote.avatar = local.avatar.rawValue
-                try await push(displayName: remote.displayName, avatar: remote.avatar, userID: userID)
+                var seeded = PlayerProfile(id: userID,
+                                           displayName: remote.displayName,
+                                           avatar: local.avatar)
+                seeded.avatarURL = remote.avatarURL
+                seeded.avatarPalette = remote.avatarPalette
+                await pushProfile(seeded)
             }
-            return PlayerProfile(id: userID,
-                                 displayName: remote.displayName,
-                                 avatar: Avatar(rawValue: remote.avatar) ?? .bolt)
+            var resolved = PlayerProfile(id: userID,
+                                         displayName: remote.displayName,
+                                         avatar: Avatar(rawValue: remote.avatar) ?? .bolt)
+            resolved.avatarURL = remote.avatarURL
+            resolved.avatarPalette = remote.avatarPalette
+            return resolved
         } catch {
             return nil
         }
     }
 
     /// Push local profile edits to the server (no-op when not signed in).
+    /// Tries the full shape (incl. the Phase 13f avatar columns); if the
+    /// server predates that migration the update fails on the unknown
+    /// columns, so fall back to the legacy shape — name edits must never
+    /// stop syncing because a migration hasn't been pasted yet.
     func pushProfile(_ profile: PlayerProfile) async {
         guard let userID = signedInUserID else { return }
-        try? await push(displayName: profile.displayName,
-                        avatar: profile.avatar.rawValue,
-                        userID: userID)
-    }
-
-    private func push(displayName: String, avatar: String, userID: UUID) async throws {
-        try await client
-            .from("profiles")
-            .update(["display_name": displayName, "avatar": avatar])
-            .eq("id", value: userID)
-            .execute()
+        struct Full: Encodable {
+            let display_name: String
+            let avatar: String
+            let avatar_url: String?
+            let avatar_palette: String
+        }
+        do {
+            try await client
+                .from("profiles")
+                .update(Full(display_name: profile.displayName,
+                             avatar: profile.avatar.rawValue,
+                             avatar_url: profile.avatarURL,
+                             avatar_palette: profile.avatarPalette ?? "auto"))
+                .eq("id", value: userID)
+                .execute()
+        } catch {
+            try? await client
+                .from("profiles")
+                .update(["display_name": profile.displayName,
+                         "avatar": profile.avatar.rawValue])
+                .eq("id", value: userID)
+                .execute()
+        }
     }
 
     // MARK: - Nonce

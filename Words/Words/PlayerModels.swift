@@ -48,7 +48,15 @@ enum Avatar: String, CaseIterable, Codable, Equatable {
 struct PlayerProfile: Identifiable, Equatable, Codable {
     let id: UUID
     var displayName: String
+    /// LEGACY icon avatar — superseded by AvatarView (photo/monogram).
+    /// Kept for decode compatibility with existing saves and the
+    /// server's `avatar` column; nothing renders it anymore.
     var avatar: Avatar
+    /// Public URL of the uploaded photo avatar (nil = monogram).
+    var avatarURL: String? = nil
+    /// Monogram duotone choice (AvatarPalette rawValue; nil/"auto" =
+    /// derived from the display name).
+    var avatarPalette: String? = nil
 
     /// The built-in AI opponent's profile. Fixed ID so it's the same
     /// "user" across games.

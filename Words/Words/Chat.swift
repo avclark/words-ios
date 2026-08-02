@@ -278,7 +278,7 @@ struct ChatSheet: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            AvatarCircle(avatar: opponent.avatar, size: 30)
+            AvatarView(profile: opponent, size: 30)
             Text(opponent.displayName)
                 .font(theme.typography.font(15, .bold))
                 .foregroundStyle(theme.chrome.textPrimary)

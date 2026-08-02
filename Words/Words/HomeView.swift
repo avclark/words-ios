@@ -150,7 +150,7 @@ struct HomeView: View {
             Button {
                 onShowProfile()
             } label: {
-                AvatarCircle(avatar: profile.avatar, size: 38)
+                AvatarView(profile: profile, size: 38)
             }
         }
     }
@@ -287,7 +287,7 @@ private struct GameRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarCircle(avatar: game.opponentPlayer.profile.avatar, size: 44)
+            AvatarView(profile: game.opponentPlayer.profile, size: 44)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(game.opponentPlayer.profile.displayName)
@@ -453,28 +453,8 @@ struct LogoView: View {
     }
 }
 
-// MARK: - Avatar
-
-/// Small round avatar used across the lobby (rows, profile button, setup).
-/// The avatar's own tint is identity data, not a theme value; only the
-/// ring reads the theme.
-struct AvatarCircle: View {
-    @Environment(\.theme) private var theme
-
-    let avatar: Avatar
-    var size: CGFloat = 40
-
-    var body: some View {
-        ZStack {
-            Circle().fill(avatar.tint.opacity(0.22))
-            Image(systemName: avatar.symbolName)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(avatar.tint)
-        }
-        .frame(width: size, height: size)
-        .overlay(Circle().strokeBorder(theme.chrome.border, lineWidth: theme.metrics.hairline))
-    }
-}
+// AvatarCircle (the icon avatar) is gone — AvatarView (photo/duotone
+// monogram, AvatarView.swift) is the one avatar component everywhere.
 
 // MARK: - Profile editor
 // Replaced by ProfileView.swift (the Profile hub: identity + stats +
@@ -513,14 +493,14 @@ private struct NewGameSetupSheet: View {
                     Button {
                         selectedFriend = nil
                     } label: {
-                        opponentRow(avatar: .robot, name: PlayerProfile.ai.displayName,
+                        opponentRow(userID: nil, name: PlayerProfile.ai.displayName,
                                     detail: "AI opponent", selected: selectedFriend == nil)
                     }
                     ForEach(friends.friends) { friend in
                         Button {
                             selectedFriend = friend
                         } label: {
-                            opponentRow(avatar: Avatar(rawValue: friend.avatar ?? "") ?? .star,
+                            opponentRow(userID: friend.userID,
                                         name: friend.displayName,
                                         detail: friend.username.map { "@\($0)" } ?? "Friend",
                                         selected: selectedFriend == friend)
@@ -579,10 +559,12 @@ private struct NewGameSetupSheet: View {
             .foregroundStyle(theme.chrome.ink.opacity(0.4))
     }
 
-    private func opponentRow(avatar: Avatar, name: String, detail: String,
+    private func opponentRow(userID: UUID?, name: String, detail: String,
                              selected: Bool) -> some View {
         HStack(spacing: 12) {
-            AvatarCircle(avatar: avatar, size: 40)
+            AvatarView(name: name,
+                       photoURL: userID.flatMap(AvatarView.publicAvatarURL(for:)),
+                       size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
                     .font(theme.typography.font(15, .semibold))

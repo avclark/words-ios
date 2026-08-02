@@ -20,5 +20,12 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Avatar photos (Phase 13f): camera capture and library picking.
+	     Requesting either WITHOUT its usage string crashes at request
+	     time — these must exist before any permission prompt. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Words uses the camera so you can take a photo for your avatar.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Words uses your photo library so you can choose a photo for your avatar.</string>
 </dict>
 </plist>

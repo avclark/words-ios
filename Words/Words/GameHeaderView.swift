@@ -164,31 +164,32 @@ private struct PlayerBadge: View {
     let trailing: Bool
 
     var body: some View {
+        // Turn state shows via the ring and the YOUR TURN/WAITING text —
+        // avatars themselves render at FULL opacity at all times (the
+        // old whole-badge fade dimmed the avatar too; only the name/
+        // score text keeps the subtle waiting fade).
         HStack(spacing: 8) {
             if trailing { info } else { avatar }
             if trailing { avatar } else { info }
         }
-        .opacity(isActive ? 1 : 0.55)
         .animation(.easeInOut(duration: 0.25), value: isActive)
     }
 
     private var avatar: some View {
-        ZStack {
-            Circle()
-                .fill(player.profile.avatar.tint.opacity(0.22))
-            Image(systemName: player.profile.avatar.symbolName)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(player.profile.avatar.tint)
-        }
-        .frame(width: 40, height: 40)
-        .overlay(
-            Circle().strokeBorder(isActive ? theme.semantic.turnAccent : theme.chrome.border,
-                                  lineWidth: isActive ? theme.metrics.selectionBorder
-                                                      : theme.metrics.hairline)
-        )
+        AvatarView(profile: player.profile, size: 40)
+            .overlay(
+                Circle().strokeBorder(isActive ? theme.semantic.turnAccent : theme.chrome.border,
+                                      lineWidth: isActive ? theme.metrics.selectionBorder
+                                                          : theme.metrics.hairline)
+            )
     }
 
     private var info: some View {
+        infoContent
+            .opacity(isActive ? 1 : 0.55)
+    }
+
+    private var infoContent: some View {
         VStack(alignment: trailing ? .trailing : .leading, spacing: 1) {
             Text(player.profile.displayName)
                 .font(theme.typography.playerName)
